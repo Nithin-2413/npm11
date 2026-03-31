@@ -26,6 +26,12 @@ export default defineConfig(({ mode }) => ({
     host: "::",
     port: 3000,
     strictPort: true,
+    allowedHosts: [
+      '.emergentagent.com',
+      '.emergentcf.cloud',
+      'execution-engine-v2.cluster-0.preview.emergentcf.cloud',
+      'localhost',
+    ],
     hmr: false,
     watch: {
       ignored: ['**/*'],
