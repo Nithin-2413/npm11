@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 
-export type StatusType = "success" | "failure" | "running" | "pending" | "warning" | "partial";
+export type StatusType = "success" | "failure" | "running" | "pending" | "warning" | "partial" | "cancelled";
 
 const STATUS_MAP: Record<StatusType, { label: string; icon: string; className: string }> = {
   success: { label: "Success", icon: "", className: "text-emerald-400 border-emerald-400/30 bg-emerald-400/10" },
@@ -9,6 +9,7 @@ const STATUS_MAP: Record<StatusType, { label: string; icon: string; className: s
   pending: { label: "Pending", icon: "", className: "text-muted-foreground border-glass-border bg-muted/10" },
   warning: { label: "Warning", icon: "", className: "text-amber-400 border-amber-400/30 bg-amber-400/10" },
   partial: { label: "Partial", icon: "", className: "text-amber-400 border-amber-400/30 bg-amber-400/10" },
+  cancelled: { label: "Cancelled", icon: "", className: "text-muted-foreground border-glass-border/60 bg-muted/20" },
 };
 
 interface StatusBadgeProps {
@@ -18,7 +19,7 @@ interface StatusBadgeProps {
 }
 
 export const StatusBadge = ({ status, className, size = "sm" }: StatusBadgeProps) => {
-  const config = STATUS_MAP[status];
+  const config = STATUS_MAP[status] || STATUS_MAP.pending; // Fallback to pending if status not found
   const sizeClasses = {
     sm: "text-[10px] px-2 py-0.5",
     md: "text-xs px-3 py-1",
