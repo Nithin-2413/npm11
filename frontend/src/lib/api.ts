@@ -1,8 +1,10 @@
 
 // In Vite, REACT_APP_* vars are accessible via import.meta.env
-// In development with proxy, use relative URLs. In production use the full URL.
+// Development: Use relative URLs (proxied through Vite)
+// Production: Use the external backend URL
 const _envUrl = (import.meta.env.REACT_APP_BACKEND_URL as string) || "";
-const BASE_URL = _envUrl && !_envUrl.includes("localhost:3000") ? _envUrl.replace(/\/$/, "") : "";
+const isDevelopment = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+const BASE_URL = isDevelopment ? "" : (_envUrl ? _envUrl.replace(/\/$/, "") : "");
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
