@@ -202,8 +202,18 @@ class BrowserAgent:
         elif action_type == "wait":
             ms = action.get("ms", 1000)
             selector = action.get("selector")
-            if selector:
-                await page.wait_for_selector(selector, timeout=30000)
+            condition = action.get("condition")
+            timeout = action.get("timeout", 30000)
+
+            if condition == "networkidle":
+                # FIX 3: Wait for network to be idle
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=timeout)
+                except Exception:
+                    # Fallback: just wait a bit
+                    await asyncio.sleep(2)
+            elif selector:
+                await page.wait_for_selector(selector, timeout=timeout)
             else:
                 await asyncio.sleep(ms / 1000)
 

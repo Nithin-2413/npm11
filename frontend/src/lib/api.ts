@@ -163,6 +163,17 @@ export interface ActionResult {
   duration_ms: number;
   error_message?: string;
   screenshot_path?: string;
+  description?: string;
+  confidence?: number;
+  used_fallback?: boolean;
+  was_refined?: boolean;
+  ai_analysis?: {       // FIX 2: Per-action AI analysis
+    root_cause: string;
+    suggested_fix: string;
+    error_type: string;
+    impact_level?: string;
+    confidence?: number;
+  };
 }
 
 export interface Execution {
@@ -180,13 +191,15 @@ export interface Execution {
   action_timeline: ActionResult[];
   network_logs: NetworkRequest[];
   console_logs: { type: string; text: string; timestamp: number }[];
-  ai_analysis?: {
+  ai_analysis?: {       // FIX 2: Updated with all required fields
     root_cause: string;
     affected_component: string;
     suggested_fix: string;
+    impact_level?: string;
     confidence: number;
     error_type: string;
-    full_analysis: string;
+    raw_error?: string;
+    full_analysis?: string;
   };
   ai_summary?: string;
   performance?: {

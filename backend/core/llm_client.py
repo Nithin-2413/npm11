@@ -7,39 +7,100 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-COMMAND_PARSE_PROMPT = """You are an expert browser automation AI. Convert the user's natural language command into a JSON array of Playwright actions.
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX 3: New intelligent system prompt with decision-making rules
+# ─────────────────────────────────────────────────────────────────────────────
+COMMAND_PARSE_PROMPT = """You are an expert browser automation agent with human-level decision making.
+You convert natural language commands into Playwright action sequences.
+
+CORE INTELLIGENCE RULES:
+
+1. SEARCH RESULTS: When a user searches for a product and multiple results appear,
+   ALWAYS click the FIRST result that best matches the search term.
+   Never stop at a search results page. Use this action pattern:
+   {"type": "click", "selector": ".s-result-item:first-child h2 a", "fallback_selectors": [
+     "[data-component-type='s-search-result']:first-child h2 a",
+     ".product-title:first-child",
+     "[data-testid='product-title']:first-child"
+   ], "description": "Click first matching search result", "confidence": 0.85}
+
+2. FALLBACK SELECTORS: Every click and fill action MUST include a "fallback_selectors"
+   array with 3 alternative selectors. The agent will try each in order if the primary fails.
+
+3. WAITING INTELLIGENTLY: After navigation and after clicks that load new pages,
+   always add: {"type": "wait", "condition": "networkidle", "timeout": 5000}
+   This waits for the page to fully settle before the next action.
+
+4. DROPDOWNS AND DYNAMIC ELEMENTS: If an action involves a dropdown or dynamically
+   loaded element, add a wait_for_selector action before interacting with it.
+
+5. ADD TO CART PATTERN: For e-commerce add-to-cart flows, use this sequence:
+   - Click product -> wait for networkidle -> check for size/variant selectors ->
+     select first available variant if required -> wait -> click add-to-cart button
+
+6. CONFIDENCE SCORING: For each action, add a "confidence" field (0.0 to 1.0)
+   indicating how certain you are the selector is correct.
+
+7. DESCRIPTION: Every action must have a "description" field explaining what it does
+   in plain English. This is shown to the user in the live execution view.
+
+8. FAKE DATA: When tasks require login/signup/form submission with user data,
+   use {{FAKER:email}}, {{FAKER:name}}, {{FAKER:password}} etc as field values.
+   These get replaced automatically with realistic fake data.
 
 Supported action types:
-- navigate: Go to a URL. Fields: {"type": "navigate", "url": "https://..."}
-- fill: Type text into an input. Fields: {"type": "fill", "selector": "#id or .class", "value": "text"}
-- click: Click an element. Fields: {"type": "click", "selector": "button#submit"}
-- select: Choose a dropdown option. Fields: {"type": "select", "selector": "select#country", "value": "US"}
-- wait: Wait for time or element. Fields: {"type": "wait", "ms": 2000} OR {"type": "wait", "selector": ".loaded"}
-- screenshot: Capture screenshot. Fields: {"type": "screenshot", "filename": "optional_name"}
-- press: Press a key. Fields: {"type": "press", "key": "Enter"}
-- hover: Hover over element. Fields: {"type": "hover", "selector": ".menu-item"}
-- scroll: Scroll page. Fields: {"type": "scroll", "selector": ".element" (optional), "direction": "down"}
-- assert: Verify element exists or has text. Fields: {"type": "assert", "selector": ".success", "text": "optional expected text"}
-- upload: Upload a file to a file input. Fields: {"type": "upload", "selector": "input[type='file']", "value": "/path/to/file.pdf"}
-- iframe: Interact with an element inside an iframe. Fields: {"type": "iframe", "selector": "iframe#myframe", "value": "button#submit-inside", "inner_action": "click"} inner_action can be "click", "fill", or "assert". For fill, add "inner_value": "text".
+- navigate: {"type": "navigate", "url": "https://...", "description": "...", "confidence": 0.99}
+- fill: {"type": "fill", "selector": "#id", "value": "text", "fallback_selectors": [...], "description": "...", "confidence": 0.9}
+- click: {"type": "click", "selector": "button", "fallback_selectors": [...], "description": "...", "confidence": 0.85}
+- select: {"type": "select", "selector": "select#id", "value": "option", "description": "...", "confidence": 0.9}
+- wait: {"type": "wait", "condition": "networkidle", "timeout": 5000} OR {"type": "wait", "ms": 2000}
+- wait_for_selector: {"type": "wait", "selector": ".element", "description": "Wait for element"}
+- screenshot: {"type": "screenshot", "filename": "name", "description": "Capture current state"}
+- press: {"type": "press", "key": "Enter", "description": "Submit form"}
+- hover: {"type": "hover", "selector": ".menu", "description": "...", "confidence": 0.8}
+- scroll: {"type": "scroll", "direction": "down", "description": "Scroll page"}
+- assert: {"type": "assert", "selector": ".success", "text": "expected", "description": "Verify result", "confidence": 0.9}
+- upload: {"type": "upload", "selector": "input[type='file']", "value": "/path", "description": "..."}
 
-Use realistic CSS selectors. For Amazon: use #twotabsearchtextbox for search, #nav-search-submit-button for search button.
-For Google: use input[name='q'] for search, input[name='btnK'] for search button.
+Common selectors for popular sites:
+- Amazon search box: #twotabsearchtextbox, fallback: input[name='field-keywords'], [data-testid='search-box']
+- Amazon search button: #nav-search-submit-button, fallback: input[type='submit'][value='Go']
+- Amazon first result: .s-result-item:first-child h2 a, fallback: [data-component-type='s-search-result']:first-child h2 a
+- Amazon add to cart: #add-to-cart-button, fallback: [id*='add-to-cart'], input[value*='Add to Cart']
+- Google search: input[name='q'], fallback: textarea[name='q'], #APjFqb
+- Google search button: input[name='btnK'], fallback: [role='button'][jsname='LgbsSe']
+- Flipkart search: input[name='q'], fallback: .search-bar__input
 
-Return ONLY a JSON object with key "actions" containing the array. Example:
-{"actions": [{"type": "navigate", "url": "https://amazon.com"}, {"type": "fill", "selector": "#twotabsearchtextbox", "value": "laptop"}]}
+Return a JSON object with this EXACT structure:
+{
+  "actions": [...list of action objects...],
+  "goal_summary": "one sentence describing what this automation will do",
+  "estimated_steps": number,
+  "site_detected": "amazon|flipkart|google|generic",
+  "complexity": "simple|medium|complex"
+}
 """
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX 2: Updated ERROR_ANALYSIS_PROMPT with exact required structure
+# ─────────────────────────────────────────────────────────────────────────────
 ERROR_ANALYSIS_PROMPT = """You are an expert QA engineer and browser automation specialist. Analyze this execution failure and provide a detailed diagnosis.
 
-Return a JSON object with these fields:
+Return a JSON object with EXACTLY these fields (all required):
 {
-  "root_cause": "What specifically caused the failure",
-  "affected_component": "Which page component or system is affected",
-  "suggested_fix": "Specific actionable fix",
+  "root_cause": "What specifically caused the failure - be precise",
+  "affected_component": "Which part of the page, API, or system failed",
+  "suggested_fix": "Exact actionable fix the developer can apply right now",
+  "impact_level": "Critical|High|Medium|Low",
   "confidence": 0.85,
-  "error_type": "selector_not_found|network_error|timeout|assertion_failed|javascript_error",
-  "full_analysis": "Detailed multi-sentence analysis of the failure"
+  "error_type": "network|selector|timeout|assertion|unknown",
+  "raw_error": "The original raw error message"
+}
+
+Also include these optional fields if helpful:
+{
+  "full_analysis": "Detailed multi-sentence analysis",
+  "alternative_selectors": ["...possible working selectors..."]
 }
 """
 
@@ -47,6 +108,18 @@ SUMMARY_PROMPT = """You are a QA report writer. Generate a concise 2-3 sentence 
 Focus on: what was tested, the outcome, and any notable issues or successes.
 Be specific, factual, and professional.
 Return just the summary text (no JSON, no markdown).
+"""
+
+# FIX 3: Prompt for refining a failed action
+REFINE_ACTION_PROMPT = """This Playwright action failed. Here is the error, the page HTML, and the page URL.
+Find the correct selector and return a fixed action JSON.
+Do not explain, return only the corrected action JSON as a single JSON object.
+
+The corrected action must:
+1. Use a valid CSS selector found in the provided HTML
+2. Include "fallback_selectors" with 2-3 alternatives
+3. Keep all other fields from the original action
+4. Add "was_refined": true to the response
 """
 
 
@@ -64,7 +137,7 @@ class LLMClient:
         reraise=True,
     )
     async def parse_command_to_actions(self, command: str) -> List[Dict[str, Any]]:
-        """Convert natural language command to list of Playwright actions."""
+        """Convert natural language command to list of Playwright actions with full metadata."""
         try:
             logger.info(f"Parsing command: {command[:80]}...")
             response = await self.client.chat.completions.create(
@@ -74,12 +147,30 @@ class LLMClient:
                     {"role": "user", "content": command},
                 ],
                 temperature=0.1,
-                max_tokens=2048,
+                max_tokens=3000,
                 response_format={"type": "json_object"},
             )
             content = response.choices[0].message.content
             data = json.loads(content)
+
+            # Handle both old format ({"actions": [...]}) and new format with metadata
             actions = data.get("actions", [])
+
+            # Attach metadata to each action if missing
+            for action in actions:
+                if "confidence" not in action:
+                    action["confidence"] = 0.8
+                if "description" not in action:
+                    action["description"] = f"{action.get('type', 'action')} on {action.get('selector', action.get('url', ''))}"
+                if "fallback_selectors" not in action and action.get("type") in ("click", "fill", "assert", "hover"):
+                    action["fallback_selectors"] = []
+
+            # Log metadata
+            goal = data.get("goal_summary", "")
+            site = data.get("site_detected", "generic")
+            complexity = data.get("complexity", "medium")
+            if goal:
+                logger.info(f"Goal: {goal} | Site: {site} | Complexity: {complexity}")
             logger.info(f"Parsed {len(actions)} actions")
             return actions
         except Exception as e:
@@ -87,7 +178,7 @@ class LLMClient:
             raise
 
     async def analyze_error(self, error_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze an execution error and return AI diagnosis."""
+        """Analyze an execution error and return AI diagnosis with required structure."""
         try:
             context_str = json.dumps(error_context, indent=2)[:4000]
             response = await self.client.chat.completions.create(
@@ -102,18 +193,90 @@ class LLMClient:
             )
             content = response.choices[0].message.content
             result = json.loads(content)
-            logger.info(f"Error analyzed: {result.get('error_type', 'unknown')}")
-            return result
+
+            # Ensure all required fields are present with correct structure (FIX 2)
+            raw_error = error_context.get("error_message", "")
+            normalized = {
+                "root_cause": result.get("root_cause", "Unknown failure"),
+                "affected_component": result.get("affected_component", "Unknown component"),
+                "suggested_fix": result.get("suggested_fix", "Check server logs for details"),
+                "impact_level": result.get("impact_level", "High"),
+                "confidence": float(result.get("confidence", 0.5)),
+                "error_type": result.get("error_type", "unknown"),
+                "raw_error": result.get("raw_error", str(raw_error)),
+                "full_analysis": result.get("full_analysis", result.get("root_cause", "")),
+            }
+            logger.info(f"Error analyzed: {normalized.get('error_type')} | confidence={normalized['confidence']}")
+            return normalized
         except Exception as e:
             logger.error(f"Error analysis failed: {e}")
+            raw_err = error_context.get("error_message", str(e))
             return {
-                "root_cause": str(e),
+                "root_cause": f"Analysis failed: {e}",
                 "affected_component": "Unknown",
                 "suggested_fix": "Check server logs for details",
+                "impact_level": "High",
                 "confidence": 0.0,
-                "error_type": "analysis_failed",
-                "full_analysis": f"Analysis failed: {e}",
+                "error_type": "unknown",
+                "raw_error": str(raw_err),
+                "full_analysis": f"Automated analysis failed. Original error: {raw_err}",
             }
+
+    async def refine_action_on_failure(
+        self,
+        failed_action: Dict[str, Any],
+        error_message: str,
+        page_html: str,
+        page_url: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        FIX 3: When an action fails, ask the LLM to find the correct selector
+        from the actual page HTML and return a fixed action.
+        """
+        try:
+            # Truncate HTML to first 8000 chars
+            html_snippet = page_html[:8000] if page_html else ""
+
+            context_info = ""
+            if context:
+                completed = context.get("completed_actions", [])
+                context_info = f"\nCompleted steps so far: {len(completed)}\n"
+                context_info += f"Goal: {context.get('goal', 'unknown')}\n"
+                context_info += f"Site: {context.get('site_context', 'generic')}\n"
+
+            prompt = f"""Failed action:
+{json.dumps(failed_action, indent=2)}
+
+Error message: {error_message}
+
+Page URL: {page_url}
+{context_info}
+Page HTML (first 8000 chars):
+{html_snippet}
+
+Find the correct CSS selector in this HTML and return the fixed action JSON only."""
+
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": REFINE_ACTION_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                max_tokens=512,
+                response_format={"type": "json_object"},
+            )
+            content = response.choices[0].message.content
+            refined = json.loads(content)
+
+            # Merge with original action (keep type, add new selector)
+            result = {**failed_action, **refined, "was_refined": True}
+            logger.info(f"Action refined: {failed_action.get('type')} -> selector: {refined.get('selector', 'unknown')}")
+            return result
+        except Exception as e:
+            logger.error(f"Action refinement failed: {e}")
+            return None
 
     async def generate_summary(self, execution_data: Dict[str, Any]) -> str:
         """Generate a natural language summary of an execution."""
@@ -128,6 +291,7 @@ class LLMClient:
                 "network_requests": len(execution_data.get("network_logs", [])),
                 "network_errors": sum(1 for r in execution_data.get("network_logs", []) if r.get("is_error")),
                 "error_message": execution_data.get("error_message"),
+                "goal": execution_data.get("goal", ""),
             }, indent=2)
 
             response = await self.client.chat.completions.create(

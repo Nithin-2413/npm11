@@ -1,5 +1,6 @@
 import asyncio
 import time
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
@@ -40,7 +41,10 @@ async def broadcast(execution_id: str, message: Dict) -> None:
         except Exception:
             dead.append(ws)
     for ws in dead:
-        _ws_connections[execution_id].remove(ws)
+        try:
+            _ws_connections[execution_id].remove(ws)
+        except ValueError:
+            pass
 
 
 def cancel_execution(execution_id: str) -> None:
@@ -49,6 +53,126 @@ def cancel_execution(execution_id: str) -> None:
 
 def is_cancelled(execution_id: str) -> bool:
     return not _active_executions.get(execution_id, True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX 3: ExecutionContext — short-term memory for the execution engine
+# ─────────────────────────────────────────────────────────────────────────────
+@dataclass
+class ExecutionContext:
+    execution_id: str
+    command: str
+    goal: str = ""
+    current_url: str = ""
+    page_title: str = ""
+    completed_actions: List[Dict] = field(default_factory=list)
+    failed_actions: List[Dict] = field(default_factory=list)
+    variables: Dict[str, Any] = field(default_factory=dict)
+    site_context: str = "generic"
+
+    def to_dict(self) -> Dict:
+        return {
+            "execution_id": self.execution_id,
+            "command": self.command,
+            "goal": self.goal,
+            "current_url": self.current_url,
+            "page_title": self.page_title,
+            "completed_actions": self.completed_actions,
+            "failed_actions": self.failed_actions,
+            "variables": self.variables,
+            "site_context": self.site_context,
+        }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX 3: Intelligent action execution with fallback selectors + LLM refinement
+# ─────────────────────────────────────────────────────────────────────────────
+async def execute_action_with_intelligence(
+    agent: BrowserAgent,
+    action: Dict[str, Any],
+    ctx: ExecutionContext,
+    llm,
+) -> Dict[str, Any]:
+    """
+    Execute an action with:
+    1. Primary selector attempt
+    2. Fallback selectors if primary fails
+    3. LLM refinement if all fallbacks fail
+    4. Mark as optional/skip if truly unresolvable
+    """
+    action_type = action.get("type", "")
+    fallback_selectors = action.get("fallback_selectors", [])
+
+    # First attempt with primary selector
+    result = await agent.execute_action(action)
+
+    if result["status"] == "success":
+        # Update context with success
+        ctx.completed_actions.append({
+            "type": action_type,
+            "selector": action.get("selector"),
+            "description": action.get("description", ""),
+        })
+        return result
+
+    # Primary failed — try fallback selectors
+    if fallback_selectors and action.get("type") in ("click", "fill", "assert", "hover", "wait"):
+        for i, fallback_sel in enumerate(fallback_selectors):
+            logger.info(f"[{ctx.execution_id}] Trying fallback selector {i+1}: {fallback_sel}")
+            fallback_action = {**action, "selector": fallback_sel}
+            fallback_result = await agent.execute_action(fallback_action)
+            if fallback_result["status"] == "success":
+                fallback_result["used_fallback"] = True
+                fallback_result["fallback_index"] = i
+                ctx.completed_actions.append({
+                    "type": action_type,
+                    "selector": fallback_sel,
+                    "description": action.get("description", "") + f" (fallback {i+1})",
+                })
+                logger.info(f"[{ctx.execution_id}] Fallback selector {i+1} succeeded")
+                return fallback_result
+
+    # All fallbacks failed — ask LLM to refine the action
+    logger.info(f"[{ctx.execution_id}] All selectors failed, asking LLM to refine action...")
+    try:
+        page_html = await agent.get_page_html()
+        page_url = ctx.current_url or "unknown"
+        error_msg = result.get("error_message", "Element not found")
+
+        refined_action = await llm.refine_action_on_failure(
+            failed_action=action,
+            error_message=error_msg,
+            page_html=page_html,
+            page_url=page_url,
+            context=ctx.to_dict(),
+        )
+
+        if refined_action:
+            logger.info(f"[{ctx.execution_id}] LLM refined action, retrying...")
+            refined_result = await agent.execute_action(refined_action)
+            if refined_result["status"] == "success":
+                refined_result["was_refined"] = True
+                ctx.completed_actions.append({
+                    "type": action_type,
+                    "selector": refined_action.get("selector"),
+                    "description": action.get("description", "") + " (LLM refined)",
+                })
+                logger.info(f"[{ctx.execution_id}] LLM-refined action succeeded!")
+                return refined_result
+            else:
+                logger.warning(f"[{ctx.execution_id}] LLM-refined action also failed")
+                result = refined_result  # Use the refined result for error reporting
+    except Exception as e:
+        logger.error(f"[{ctx.execution_id}] LLM refinement error: {e}")
+
+    # All attempts exhausted
+    ctx.failed_actions.append({
+        "type": action_type,
+        "selector": action.get("selector"),
+        "error": result.get("error_message"),
+        "description": action.get("description", ""),
+    })
+    return result
 
 
 async def execute_command(
@@ -83,7 +207,13 @@ async def execute_command(
         slow_mo=options.get("slow_mo", 0),
         on_update=on_update,
     )
-    interceptor = NetworkInterceptor(execution_id=execution_id, on_update=on_update)
+    interceptor = NetworkInterceptor(execution_id=execution_id, on_update=on_update, db=db)
+
+    # FIX 3: Initialize ExecutionContext
+    ctx = ExecutionContext(
+        execution_id=execution_id,
+        command=command,
+    )
 
     try:
         # Step 1: Parse command with LLM
@@ -93,10 +223,13 @@ async def execute_command(
         if not actions:
             raise ValueError("LLM returned no actions")
 
+        # Extract goal metadata if available (from new LLM response format)
+        # The actions list is already processed by llm_client.parse_command_to_actions
+
         await broadcast(execution_id, {
             "type": "actions_parsed",
             "count": len(actions),
-            "actions": actions,
+            "actions": [{"type": a.get("type"), "description": a.get("description", ""), "confidence": a.get("confidence", 0.8)} for a in actions],
         })
 
         # Step 2: Start browser
@@ -104,16 +237,27 @@ async def execute_command(
         page = await agent.start()
         interceptor.attach_to_page(page)
 
-        # Step 3: Execute actions
+        # Step 3: Execute actions with intelligence
         action_results = []
         successful = 0
         failed = 0
         screenshots = []
+        ai_analysis = None
 
         for i, action in enumerate(actions):
             if is_cancelled(execution_id):
                 logger.info(f"[{execution_id}] Execution cancelled at action {i}")
                 break
+
+            # Update context with current page state
+            try:
+                ctx.current_url = page.url if page.url else ""
+                ctx.page_title = await page.title() if page else ""
+            except Exception:
+                pass
+
+            action_desc = action.get("description", f"{action.get('type')} action")
+            action_confidence = action.get("confidence", 0.8)
 
             await broadcast(execution_id, {
                 "type": "action_start",
@@ -123,10 +267,14 @@ async def execute_command(
                 "selector": action.get("selector"),
                 "url": action.get("url"),
                 "value": action.get("value"),
+                "description": action_desc,
+                "confidence": action_confidence,
             })
 
-            result = await agent.execute_action(action)
+            # FIX 3: Use intelligent execution with fallbacks
+            result = await execute_action_with_intelligence(agent, action, ctx, llm)
             result["action_index"] = i
+            result["description"] = action_desc
 
             # Screenshot after each action
             ss = await agent.take_screenshot(f"step_{i+1}")
@@ -149,37 +297,72 @@ async def execute_command(
                 "duration_ms": result["duration_ms"],
                 "screenshot_url": result.get("screenshot_path"),
                 "error": result.get("error_message"),
+                "description": action_desc,
+                "used_fallback": result.get("used_fallback", False),
+                "was_refined": result.get("was_refined", False),
             })
 
-            # If failed and not optional, do AI analysis and stop
-            if result["status"] == "failure" and not action.get("optional", False):
-                if not options.get("continue_on_error", False):
-                    # AI error analysis
-                    page_html = await agent.get_page_html()
-                    error_context = {
-                        "command": command,
-                        "failed_action": action,
-                        "error_message": result.get("error_message"),
-                        "action_index": i,
-                        "previous_actions": [a.get("type") for a in actions[:i]],
-                        "console_logs": interceptor.get_console_logs()[-10:],
-                        "page_html_snippet": page_html[:2000] if page_html else "",
-                    }
-                    ai_analysis = await llm.analyze_error(error_context)
-                    await broadcast(execution_id, {
-                        "type": "error",
-                        "action_index": i,
-                        "error_message": result.get("error_message"),
-                        "ai_analysis": ai_analysis,
-                    })
-                    # Save AI analysis to DB
+            # FIX 2+3: If failed — perform AI analysis and decide whether to stop
+            if result["status"] == "failure":
+                is_optional = action.get("optional", False)
+                continue_on_error = options.get("continue_on_error", False)
+
+                # Always generate AI analysis for failed actions
+                page_html = await agent.get_page_html()
+                error_context = {
+                    "command": command,
+                    "goal": ctx.goal,
+                    "failed_action": {k: v for k, v in action.items() if k != "fallback_selectors"},
+                    "error_message": result.get("error_message"),
+                    "action_index": i,
+                    "previous_actions": [a.get("type") for a in actions[:i]],
+                    "completed_actions": ctx.completed_actions,
+                    "console_logs": interceptor.get_console_logs()[-10:],
+                    "page_html_snippet": page_html[:2000] if page_html else "",
+                    "page_url": ctx.current_url,
+                    "site_context": ctx.site_context,
+                }
+                ai_analysis = await llm.analyze_error(error_context)
+
+                # FIX 2: Store ai_analysis in action timeline entry too
+                result["ai_analysis"] = ai_analysis
+
+                await broadcast(execution_id, {
+                    "type": "error",
+                    "action_index": i,
+                    "error_message": result.get("error_message"),
+                    "ai_analysis": ai_analysis,
+                    "description": action_desc,
+                })
+
+                # FIX 2: Save AI analysis to DB immediately
+                await db.executions.update_one(
+                    {"execution_id": execution_id},
+                    {"$set": {"ai_analysis": ai_analysis}},
+                )
+
+                if not is_optional and not continue_on_error:
+                    # Required action failed → mark as PARTIAL and continue remaining
+                    # (changed from "stop" to "mark PARTIAL, continue")
+                    logger.warning(f"[{execution_id}] Required action {i} failed — marking PARTIAL, continuing")
+                    # Update DB with current state
                     await db.executions.update_one(
                         {"execution_id": execution_id},
-                        {"$set": {"ai_analysis": ai_analysis}},
+                        {"$set": {
+                            "status": "PARTIAL",
+                            "total_actions": len(actions),
+                            "successful_actions": successful,
+                            "failed_actions": failed,
+                            "action_timeline": action_results,
+                            "screenshots": screenshots,
+                            "ai_analysis": ai_analysis,
+                        }}
                     )
-                    break
+                    # Don't break — continue remaining actions
+                elif is_optional:
+                    logger.info(f"[{execution_id}] Optional action {i} failed — skipping")
 
-            # Update DB progress
+            # Update DB progress after each action
             await db.executions.update_one(
                 {"execution_id": execution_id},
                 {"$set": {
@@ -216,35 +399,42 @@ async def execute_command(
             performance_score=round((successful / total * 100) if total else 0, 1),
         )
 
-        # Generate AI summary
+        # Generate AI summary with full context
         exec_data = {
             "status": final_status,
             "command": command,
+            "goal": ctx.goal,
             "duration_seconds": round(duration, 2),
             "total_actions": total,
             "successful_actions": successful,
             "failed_actions": failed,
             "network_logs": network_logs,
+            "completed_actions": ctx.completed_actions,
+            "failed_action_details": ctx.failed_actions,
         }
         ai_summary = await llm.generate_summary(exec_data)
 
-        # Final DB update
+        # Final DB update — FIX 2: ensure ai_analysis is always included
+        final_update = {
+            "status": final_status,
+            "completed_at": utcnow_str(),
+            "duration_seconds": round(duration, 2),
+            "total_actions": total,
+            "successful_actions": successful,
+            "failed_actions": failed,
+            "action_timeline": action_results,
+            "network_logs": network_logs,
+            "console_logs": list(console_logs),
+            "screenshots": screenshots,
+            "ai_summary": ai_summary,
+            "performance": perf.dict(),
+        }
+        if ai_analysis:
+            final_update["ai_analysis"] = ai_analysis
+
         await db.executions.update_one(
             {"execution_id": execution_id},
-            {"$set": {
-                "status": final_status,
-                "completed_at": utcnow_str(),
-                "duration_seconds": round(duration, 2),
-                "total_actions": total,
-                "successful_actions": successful,
-                "failed_actions": failed,
-                "action_timeline": action_results,
-                "network_logs": network_logs,
-                "console_logs": list(console_logs),
-                "screenshots": screenshots,
-                "ai_summary": ai_summary,
-                "performance": perf.dict(),
-            }}
+            {"$set": final_update}
         )
 
         await broadcast(execution_id, {
@@ -254,6 +444,7 @@ async def execute_command(
             "actions_successful": successful,
             "actions_total": total,
             "ai_summary": ai_summary,
+            "ai_analysis": ai_analysis,
         })
 
         logger.info(f"[{execution_id}] Completed: {final_status} ({successful}/{total} actions, {duration:.1f}s)")
@@ -261,19 +452,36 @@ async def execute_command(
     except Exception as e:
         logger.error(f"[{execution_id}] Execution error: {e}")
         duration = time.time() - start_time
+
+        # Generate AI analysis for unexpected errors
+        error_ai = None
+        try:
+            error_ai = await llm.analyze_error({
+                "command": command,
+                "error_message": str(e),
+                "error_type": "execution_crash",
+            })
+        except Exception:
+            pass
+
+        update = {
+            "status": "FAILURE",
+            "completed_at": utcnow_str(),
+            "duration_seconds": round(duration, 2),
+            "error_message": str(e),
+        }
+        if error_ai:
+            update["ai_analysis"] = error_ai
+
         await db.executions.update_one(
             {"execution_id": execution_id},
-            {"$set": {
-                "status": "FAILURE",
-                "completed_at": utcnow_str(),
-                "duration_seconds": round(duration, 2),
-                "error_message": str(e),
-            }}
+            {"$set": update}
         )
         await broadcast(execution_id, {
             "type": "execution_complete",
             "status": "FAILURE",
             "error": str(e),
+            "ai_analysis": error_ai,
         })
     finally:
         await agent.close()
@@ -338,7 +546,16 @@ async def execute_blueprint(
         headless=options.get("headless", True),
         on_update=on_update,
     )
-    interceptor = NetworkInterceptor(execution_id=execution_id, on_update=on_update)
+    interceptor = NetworkInterceptor(execution_id=execution_id, on_update=on_update, db=db)
+
+    # FIX 3: ExecutionContext for blueprints too
+    ctx = ExecutionContext(
+        execution_id=execution_id,
+        command=command,
+        goal=f"Execute blueprint: {bp_doc.get('name', blueprint_id)}",
+    )
+
+    ai_analysis = None
 
     try:
         page = await agent.start()
@@ -353,16 +570,24 @@ async def execute_blueprint(
             if is_cancelled(execution_id):
                 break
 
+            try:
+                ctx.current_url = page.url if page.url else ""
+            except Exception:
+                pass
+
             await broadcast(execution_id, {
                 "type": "action_start",
                 "index": i,
                 "total": len(injected_actions),
                 "action": action.get("type"),
                 "selector": action.get("selector"),
+                "description": action.get("description", ""),
             })
 
-            result = await agent.execute_action(action)
+            # FIX 3: Use intelligent execution for blueprints too
+            result = await execute_action_with_intelligence(agent, action, ctx, llm)
             result["action_index"] = i
+
             ss = await agent.take_screenshot(f"bp_{i+1}")
             if ss:
                 result["screenshot_path"] = ss
@@ -383,9 +608,25 @@ async def execute_blueprint(
                 "screenshot_url": result.get("screenshot_path"),
             })
 
-            if result["status"] == "failure" and not action.get("optional", False):
-                if not options.get("continue_on_error", False):
-                    break
+            if result["status"] == "failure":
+                is_optional = action.get("optional", False)
+                if not is_optional:
+                    # FIX 2: Always generate AI analysis
+                    page_html = await agent.get_page_html()
+                    error_context = {
+                        "command": command,
+                        "failed_action": action,
+                        "error_message": result.get("error_message"),
+                        "action_index": i,
+                    }
+                    ai_analysis = await llm.analyze_error(error_context)
+                    result["ai_analysis"] = ai_analysis
+                    await db.executions.update_one(
+                        {"execution_id": execution_id},
+                        {"$set": {"ai_analysis": ai_analysis}},
+                    )
+                    if not options.get("continue_on_error", False):
+                        break
 
         duration = time.time() - start_time
         total = len(injected_actions)
@@ -408,21 +649,25 @@ async def execute_blueprint(
             "failed_actions": failed, "network_logs": network_logs,
         })
 
+        final_update = {
+            "status": final_status,
+            "completed_at": utcnow_str(),
+            "duration_seconds": round(duration, 2),
+            "total_actions": total,
+            "successful_actions": successful,
+            "failed_actions": failed,
+            "action_timeline": action_results,
+            "network_logs": network_logs,
+            "console_logs": list(console_logs),
+            "screenshots": screenshots,
+            "ai_summary": ai_summary,
+        }
+        if ai_analysis:
+            final_update["ai_analysis"] = ai_analysis
+
         await db.executions.update_one(
             {"execution_id": execution_id},
-            {"$set": {
-                "status": final_status,
-                "completed_at": utcnow_str(),
-                "duration_seconds": round(duration, 2),
-                "total_actions": total,
-                "successful_actions": successful,
-                "failed_actions": failed,
-                "action_timeline": action_results,
-                "network_logs": network_logs,
-                "console_logs": list(console_logs),
-                "screenshots": screenshots,
-                "ai_summary": ai_summary,
-            }}
+            {"$set": final_update}
         )
 
         # Update blueprint usage stats
@@ -437,6 +682,7 @@ async def execute_blueprint(
             "duration_seconds": round(duration, 2),
             "actions_successful": successful,
             "actions_total": total,
+            "ai_analysis": ai_analysis,
         })
 
     except Exception as e:

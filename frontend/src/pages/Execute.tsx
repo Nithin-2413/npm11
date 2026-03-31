@@ -1,12 +1,16 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
+import { useNavigate } from "react-router-dom";
 import { GlassPanel } from "@/components/GlassPanel";
 import { StatusBadge, StatusType } from "@/components/StatusBadge";
 import { ActionBadge, ActionType } from "@/components/ActionBadge";
 import { LiquidProgress } from "@/components/LiquidProgress";
 import { LiveBrowserPreview } from "@/components/LiveBrowserPreview";
-import { Play, X, Brain, Wrench, AlertTriangle, Zap, ArrowRight, RefreshCw, BookOpen } from "lucide-react";
+import {
+  Play, X, Brain, Wrench, AlertTriangle, Zap, ArrowRight,
+  RefreshCw, BookOpen, CheckCircle, XCircle, AlertCircle
+} from "lucide-react";
 import {
   executeCommand, executeBlueprint, cancelExecution, createExecutionWS,
   listBlueprints, Blueprint, ActionResult, NetworkRequest
@@ -27,7 +31,19 @@ interface LiveNetReq {
   is_error: boolean;
 }
 
+interface AIDiagnosisData {
+  root_cause: string;
+  suggested_fix: string;
+  confidence: number;
+  full_analysis?: string;
+  affected_component: string;
+  error_type?: string;
+  impact_level?: string;
+  raw_error?: string;
+}
+
 const Execute = () => {
+  const navigate = useNavigate();
   const [command, setCommand] = useState("");
   const [executionId, setExecutionId] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -45,16 +61,23 @@ const Execute = () => {
   const [actions, setActions] = useState<ActionResult[]>([]);
   const [terminalLogs, setTerminalLogs] = useState<TerminalLine[]>([]);
   const [networkLogs, setNetworkLogs] = useState<LiveNetReq[]>([]);
-  const [aiAnalysis, setAiAnalysis] = useState<{
-    root_cause: string; suggested_fix: string; confidence: number; full_analysis: string; affected_component: string;
-  } | null>(null);
+  const [aiAnalysis, setAiAnalysis] = useState<AIDiagnosisData | null>(null);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
   const [latestScreenshot, setLatestScreenshot] = useState<string | null>(null);
 
-  const wsRef = useRef<WebSocket | null>(null);
+  // ──────────────────────────────────────────────────────────────────────────
+  // FIX 1: All WebSocket/execution state in refs — survives re-renders
+  // ──────────────────────────────────────────────────────────────────────────
+  const wsRef = useRef<WebSocket | null>(null);          // NEVER useState for WS
+  const isExecutingRef = useRef(false);                  // Navigation guard
+  const wsConnectedRef = useRef(false);                  // Track WS connected state
+  const wsReconnectCountRef = useRef(0);                 // Reconnect attempt counter
+  const wsReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const terminalRef = useRef<HTMLDivElement>(null);
   const startTime = useRef<number>(0);
+  const terminalRef = useRef<HTMLDivElement>(null);
+  const currentExecutionIdRef = useRef<string | null>(null);
 
   const BACKEND_URL = (import.meta.env.REACT_APP_BACKEND_URL as string || "").replace(/\/$/, "");
 
@@ -68,93 +91,262 @@ const Execute = () => {
     if (terminalRef.current) terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
   }, [terminalLogs]);
 
-  const addLog = useCallback((type: TerminalLine["type"], text: string) => {
-    const elapsed = startTime.current ? ((Date.now() - startTime.current) / 1000).toFixed(2) : "0.00";
-    setTerminalLogs(prev => [...prev.slice(-200), { type, text, time: `${elapsed}s` }]);
+  // ──────────────────────────────────────────────────────────────────────────
+  // FIX 1: beforeunload handler — warn user if execution is running
+  // ──────────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isExecutingRef.current) {
+        e.preventDefault();
+        e.returnValue = "An execution is running. Leaving will cancel it. Are you sure?";
+        return e.returnValue;
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, []); // Empty deps — handler reads from ref, not state
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // FIX 1: Cleanup all intervals/timers/WS on unmount
+  // ──────────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    return () => {
+      clearAllTimers();
+      if (wsRef.current) {
+        wsRef.current.onclose = null; // Prevent reconnect on unmount
+        wsRef.current.onerror = null;
+        wsRef.current.close();
+      }
+    };
   }, []);
 
-  const connectWebSocket = useCallback((execId: string) => {
-    if (wsRef.current) wsRef.current.close();
-    const ws = createExecutionWS(execId);
-    wsRef.current = ws;
+  const clearAllTimers = () => {
+    if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null; }
+    if (pollingIntervalRef.current) { clearInterval(pollingIntervalRef.current); pollingIntervalRef.current = null; }
+    if (wsReconnectTimerRef.current) { clearTimeout(wsReconnectTimerRef.current); wsReconnectTimerRef.current = null; }
+  };
 
-    ws.onopen = () => addLog("system", "WebSocket connected — live stream active");
+  const addLog = useCallback((type: TerminalLine["type"], text: string) => {
+    const el = startTime.current ? ((Date.now() - startTime.current) / 1000).toFixed(2) : "0.00";
+    setTerminalLogs(prev => [...prev.slice(-200), { type, text, time: `${el}s` }]);
+  }, []);
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // FIX 1: Stop polling if WS is connected. Start polling only if WS fails
+  // ──────────────────────────────────────────────────────────────────────────
+  const stopPolling = useCallback(() => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+  }, []);
+
+  const startPolling = useCallback((execId: string) => {
+    // Only poll if WS is not connected
+    if (wsConnectedRef.current) return;
+    if (pollingIntervalRef.current) return; // already polling
+
+    addLog("system", "WebSocket unavailable — falling back to polling");
+    pollingIntervalRef.current = setInterval(async () => {
+      try {
+        const { getExecutionStatus } = await import("@/lib/api");
+        const statusData = await getExecutionStatus(execId);
+
+        // If WS reconnected during polling, stop polling
+        if (wsConnectedRef.current) {
+          stopPolling();
+          return;
+        }
+
+        if (statusData.status !== "RUNNING") {
+          const s = statusData.status;
+          setStatus(s === "SUCCESS" ? "success" : s === "FAILURE" ? "failure" : s === "PARTIAL" ? "partial" : "pending");
+          setProgress(100);
+          setIsRunning(false);
+          isExecutingRef.current = false;
+          clearAllTimers();
+          toast[s === "SUCCESS" ? "success" : "error"](`Execution ${s.toLowerCase()}`);
+        } else {
+          const pct = statusData.actions_total > 0
+            ? Math.round((statusData.actions_completed / statusData.actions_total) * 100)
+            : 0;
+          setProgress(pct);
+        }
+      } catch {}
+    }, 3000);
+  }, [addLog, stopPolling]);
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // FIX 1: WebSocket with silent reconnect (no page reload, exponential backoff)
+  // ──────────────────────────────────────────────────────────────────────────
+  const connectWebSocket = useCallback((execId: string, isReconnect = false) => {
+    // FIX 1: Close existing WS cleanly without triggering reconnect loop
+    if (wsRef.current) {
+      wsRef.current.onclose = null; // Detach handler before closing
+      wsRef.current.onerror = null;
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+
+    if (!isReconnect) {
+      wsReconnectCountRef.current = 0;
+    }
+
+    const ws = createExecutionWS(execId);
+    wsRef.current = ws;  // Store in ref, NOT state
+
+    ws.onopen = () => {
+      wsConnectedRef.current = true;
+      wsReconnectCountRef.current = 0; // Reset on successful connection
+      // FIX 1: Stop polling when WS connects
+      stopPolling();
+      if (isReconnect) {
+        addLog("system", "WebSocket reconnected successfully");
+      } else {
+        addLog("system", "WebSocket connected — live stream active");
+      }
+    };
 
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data);
-
-        if (msg.type === "connected") {
-          addLog("system", `Execution ${execId} connected`);
-        } else if (msg.type === "status") {
-          addLog("info", msg.message);
-        } else if (msg.type === "actions_parsed") {
-          addLog("success", `✓ AI parsed ${msg.count} actions`);
-        } else if (msg.type === "action_start") {
-          const pct = msg.total > 0 ? Math.round((msg.index / msg.total) * 100) : 0;
-          setProgress(pct);
-          const desc = msg.url || msg.selector || msg.value || "";
-          addLog("info", `▶ Action ${msg.index + 1}/${msg.total}: ${msg.action} ${desc}`);
-        } else if (msg.type === "action_complete") {
-          const pct = msg.total > 0 ? Math.round(((msg.index + 1) / msg.total) * 100) : 100;
-          setProgress(pct);
-          if (msg.status === "success") {
-            addLog("success", `✓ Action ${msg.index + 1} done (${msg.duration_ms}ms)`);
-          } else {
-            addLog("error", `✗ Action ${msg.index + 1} failed: ${msg.error || "unknown"}`);
-          }
-          if (msg.screenshot_url) {
-            setLatestScreenshot(`${BACKEND_URL}${msg.screenshot_url}`);
-          }
-          // Add to timeline
-          setActions(prev => {
-            const updated = [...prev];
-            const existing = updated.findIndex(a => a.action_index === msg.index);
-            if (existing >= 0) {
-              updated[existing] = { ...updated[existing], status: msg.status, duration_ms: msg.duration_ms, screenshot_path: msg.screenshot_url };
-            } else {
-              updated.push({
-                action_index: msg.index, action_type: "action",
-                status: msg.status, started_at: new Date().toISOString(),
-                duration_ms: msg.duration_ms, screenshot_path: msg.screenshot_url
-              });
-            }
-            return updated;
-          });
-        } else if (msg.type === "network_request") {
-          setNetworkLogs(prev => [...prev.slice(-50), {
-            method: msg.method, url: msg.url, status: msg.status,
-            duration_ms: msg.duration_ms, is_error: msg.is_error
-          }]);
-          if (msg.is_error) addLog("warn", `⚠ ${msg.method} ${msg.url} → ${msg.status}`);
-        } else if (msg.type === "console_log") {
-          const t = msg.log_type as TerminalLine["type"];
-          addLog(["warn", "error"].includes(t) ? t : "info", `[console.${msg.log_type}] ${msg.text}`);
-        } else if (msg.type === "error") {
-          addLog("error", `✗ ${msg.error_message}`);
-          if (msg.ai_analysis) setAiAnalysis(msg.ai_analysis);
-        } else if (msg.type === "execution_complete") {
-          const s = msg.status;
-          setStatus(s === "SUCCESS" ? "success" : s === "FAILURE" ? "failure" : s === "PARTIAL" ? "partial" : "pending");
-          setProgress(s === "SUCCESS" ? 100 : progress);
-          if (msg.ai_summary) setAiSummary(msg.ai_summary);
-          addLog(s === "SUCCESS" ? "success" : "error",
-            `━━ Execution ${s} — ${msg.actions_successful}/${msg.actions_total} actions, ${msg.duration_seconds?.toFixed(1)}s`);
-          setIsRunning(false);
-          if (elapsedRef.current) clearInterval(elapsedRef.current);
-          toast[s === "SUCCESS" ? "success" : "error"](`Execution ${s.toLowerCase()}`);
-        }
+        handleWsMessage(msg);
       } catch (e) {
         console.error("WS parse error:", e);
       }
     };
 
-    ws.onerror = () => addLog("error", "WebSocket error — connection lost");
-    ws.onclose = () => addLog("system", "WebSocket disconnected");
-  }, [addLog, progress, BACKEND_URL]);
+    ws.onerror = () => {
+      // FIX 1: Log error but DO NOT reload page or reset state
+      wsConnectedRef.current = false;
+      addLog("warn", "WebSocket connection error");
+    };
+
+    ws.onclose = () => {
+      wsConnectedRef.current = false;
+
+      // FIX 1: Only reconnect if execution is still running
+      if (!isExecutingRef.current) {
+        addLog("system", "WebSocket closed (execution complete)");
+        return;
+      }
+
+      const maxRetries = 5;
+      const attempt = wsReconnectCountRef.current;
+
+      if (attempt >= maxRetries) {
+        addLog("warn", `WebSocket reconnect failed after ${maxRetries} attempts — switching to polling`);
+        startPolling(execId);
+        return;
+      }
+
+      // FIX 1: Exponential backoff reconnect — NO window.location.reload() EVER
+      const delay = Math.min(1000 * Math.pow(1.5, attempt), 10000); // 1s, 1.5s, 2.25s, 3.4s, 5.1s
+      wsReconnectCountRef.current += 1;
+      addLog("system", `WebSocket disconnected — reconnecting in ${(delay / 1000).toFixed(1)}s (attempt ${attempt + 1}/${maxRetries})`);
+
+      wsReconnectTimerRef.current = setTimeout(() => {
+        if (isExecutingRef.current) {
+          connectWebSocket(execId, true);
+        }
+      }, delay);
+    };
+  }, [addLog, stopPolling, startPolling]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // WebSocket message handler (extracted to avoid closure issues)
+  // ──────────────────────────────────────────────────────────────────────────
+  const handleWsMessage = useCallback((msg: Record<string, unknown>) => {
+    if (msg.type === "connected") {
+      addLog("system", `Execution ${msg.execution_id || currentExecutionIdRef.current} connected`);
+    } else if (msg.type === "status") {
+      addLog("info", msg.message as string);
+    } else if (msg.type === "actions_parsed") {
+      addLog("success", `✓ AI parsed ${msg.count} actions`);
+    } else if (msg.type === "action_start") {
+      const { index, total, action, url, selector, value, description, confidence } = msg as Record<string, unknown>;
+      const pct = (total as number) > 0 ? Math.round(((index as number) / (total as number)) * 100) : 0;
+      setProgress(pct);
+      const target = (url || selector || value || "") as string;
+      const desc = (description as string) || `${action} ${target}`;
+      const conf = confidence ? ` (${Math.round((confidence as number) * 100)}%)` : "";
+      addLog("info", `▶ Step ${(index as number) + 1}/${total}: ${desc}${conf}`);
+    } else if (msg.type === "action_complete") {
+      const { index, total, status: s, duration_ms, screenshot_url, error, used_fallback, was_refined } = msg as Record<string, unknown>;
+      const pct = (total as number) > 0 ? Math.round((((index as number) + 1) / (total as number)) * 100) : 100;
+      setProgress(pct);
+      if (s === "success") {
+        const extras = [used_fallback ? "✦ fallback" : null, was_refined ? "✧ AI-refined" : null].filter(Boolean).join(", ");
+        addLog("success", `✓ Step ${(index as number) + 1} done (${duration_ms}ms)${extras ? ` [${extras}]` : ""}`);
+      } else {
+        addLog("error", `✗ Step ${(index as number) + 1} failed: ${error || "unknown"}`);
+      }
+      if (screenshot_url) {
+        setLatestScreenshot(`${BACKEND_URL}${screenshot_url}`);
+      }
+      setActions(prev => {
+        const updated = [...prev];
+        const existing = updated.findIndex(a => a.action_index === (index as number));
+        if (existing >= 0) {
+          updated[existing] = {
+            ...updated[existing],
+            status: s as "success" | "failure" | "skipped",
+            duration_ms: duration_ms as number,
+            screenshot_path: screenshot_url as string | undefined,
+          };
+        } else {
+          updated.push({
+            action_index: index as number,
+            action_type: "action",
+            status: s as "success" | "failure" | "skipped",
+            started_at: new Date().toISOString(),
+            duration_ms: duration_ms as number,
+            screenshot_path: screenshot_url as string | undefined,
+          });
+        }
+        return updated;
+      });
+    } else if (msg.type === "network_request") {
+      setNetworkLogs(prev => [...prev.slice(-50), {
+        method: msg.method as string,
+        url: msg.url as string,
+        status: msg.status as number,
+        duration_ms: msg.duration_ms as number,
+        is_error: msg.is_error as boolean,
+      }]);
+      if (msg.is_error) addLog("warn", `⚠ ${msg.method} ${(msg.url as string).slice(0, 80)} → ${msg.status}`);
+    } else if (msg.type === "console_log") {
+      const t = msg.log_type as TerminalLine["type"];
+      addLog(["warn", "error"].includes(t) ? t : "info", `[console.${msg.log_type}] ${msg.text}`);
+    } else if (msg.type === "error") {
+      addLog("error", `✗ ${msg.error_message}`);
+      // FIX 2: Set AI analysis from WebSocket error event
+      if (msg.ai_analysis) {
+        setAiAnalysis(msg.ai_analysis as AIDiagnosisData);
+      }
+    } else if (msg.type === "execution_complete") {
+      const s = msg.status as string;
+      setStatus(s === "SUCCESS" ? "success" : s === "FAILURE" ? "failure" : s === "PARTIAL" ? "partial" : "pending");
+      setProgress(s === "SUCCESS" ? 100 : progress);
+      if (msg.ai_summary) setAiSummary(msg.ai_summary as string);
+      // FIX 2: Also capture ai_analysis from execution_complete event
+      if (msg.ai_analysis) {
+        setAiAnalysis(msg.ai_analysis as AIDiagnosisData);
+      }
+      addLog(
+        s === "SUCCESS" ? "success" : "error",
+        `━━ Execution ${s} — ${msg.actions_successful}/${msg.actions_total} actions, ${(msg.duration_seconds as number)?.toFixed(1)}s`
+      );
+      setIsRunning(false);
+      isExecutingRef.current = false; // FIX 1: Update ref before timers
+      clearAllTimers();
+      toast[s === "SUCCESS" ? "success" : "error"](`Execution ${s.toLowerCase()}`);
+    }
+  }, [addLog, BACKEND_URL, progress]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleRun = async () => {
-    if (!command.trim()) return;
+    if (!command.trim() || isRunning) return;
+
     // Reset state
     setActions([]);
     setTerminalLogs([]);
@@ -166,6 +358,7 @@ const Execute = () => {
     setElapsed(0);
     setStatus("running");
     setIsRunning(true);
+    isExecutingRef.current = true; // FIX 1: Mark as executing
     startTime.current = Date.now();
 
     elapsedRef.current = setInterval(() => {
@@ -176,15 +369,17 @@ const Execute = () => {
       addLog("system", `Starting: ${command}`);
       const res = await executeCommand(command, { headless: true });
       setExecutionId(res.execution_id);
+      currentExecutionIdRef.current = res.execution_id;
       addLog("info", `Execution ID: ${res.execution_id}`);
       connectWebSocket(res.execution_id);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       addLog("error", `Failed to start: ${msg}`);
       setIsRunning(false);
+      isExecutingRef.current = false;
       setStatus("failure");
       toast.error("Failed to start execution");
-      if (elapsedRef.current) clearInterval(elapsedRef.current);
+      clearAllTimers();
     }
   };
 
@@ -192,9 +387,17 @@ const Execute = () => {
     if (executionId) {
       try { await cancelExecution(executionId); } catch {}
     }
-    if (wsRef.current) wsRef.current.close();
-    if (elapsedRef.current) clearInterval(elapsedRef.current);
+    // FIX 1: Close WS cleanly without triggering reconnect
+    if (wsRef.current) {
+      isExecutingRef.current = false; // Must set BEFORE closing WS
+      wsRef.current.onclose = null;
+      wsRef.current.onerror = null;
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    clearAllTimers();
     setIsRunning(false);
+    isExecutingRef.current = false;
     setStatus("partial");
     addLog("warn", "Execution cancelled by user");
     toast.info("Execution cancelled");
@@ -202,6 +405,8 @@ const Execute = () => {
 
   const handleBlueprintSelect = async (bp: Blueprint) => {
     setShowBpMenu(false);
+    if (isRunning) return;
+
     setActions([]);
     setTerminalLogs([]);
     setNetworkLogs([]);
@@ -212,6 +417,7 @@ const Execute = () => {
     setElapsed(0);
     setStatus("running");
     setIsRunning(true);
+    isExecutingRef.current = true;
     startTime.current = Date.now();
 
     elapsedRef.current = setInterval(() => {
@@ -222,6 +428,7 @@ const Execute = () => {
       addLog("system", `Running blueprint: ${bp.name}`);
       const res = await executeBlueprint(bp.blueprint_id, {});
       setExecutionId(res.execution_id);
+      currentExecutionIdRef.current = res.execution_id;
       addLog("info", `Execution ID: ${res.execution_id}`);
       connectWebSocket(res.execution_id);
       setCommand(`Run blueprint: ${bp.name}`);
@@ -229,8 +436,9 @@ const Execute = () => {
       const msg = err instanceof Error ? err.message : String(err);
       addLog("error", `Failed: ${msg}`);
       setIsRunning(false);
+      isExecutingRef.current = false;
       setStatus("failure");
-      if (elapsedRef.current) clearInterval(elapsedRef.current);
+      clearAllTimers();
     }
   };
 
@@ -253,7 +461,7 @@ const Execute = () => {
               rows={2}
               disabled={isRunning}
               className="w-full font-mono text-sm text-foreground/60 bg-muted/10 rounded-lg px-3 py-2 border border-glass-border/60 outline-none focus:ring-1 focus:ring-primary/40 resize-none placeholder:text-muted-foreground/40 disabled:opacity-60 disabled:cursor-not-allowed"
-              placeholder="Go to amazon.com, search for wireless mouse, click first result"
+              placeholder="Go to amazon.com, search for wireless mouse, click first result, add to cart"
             />
           </div>
           <div className="flex items-center justify-center gap-3 flex-wrap">
@@ -284,7 +492,8 @@ const Execute = () => {
                     <X className="w-3 h-3" /> Cancel
                   </button>
                   <div className="flex items-center gap-1.5 px-4 py-2 rounded-xl font-mono text-xs border border-primary/20 text-primary/60">
-                    <RefreshCw className="w-3 h-3 animate-spin" /> Running...
+                    <RefreshCw className="w-3 h-3 animate-spin" />
+                    Running... {wsConnectedRef.current ? "🔗" : "📡"}
                   </div>
                 </motion.div>
               )}
@@ -438,45 +647,15 @@ const Execute = () => {
             </div>
           </GlassPanel>
 
-          {/* AI Diagnosis */}
+          {/* FIX 2: AI Diagnosis — shows errors with full details */}
           <GlassPanel title="AI Diagnosis" icon="🧠" glow="pink" delay={0.35}>
-            {!aiAnalysis ? (
-              <div className="font-mono text-xs text-muted-foreground text-center py-8">
-                {isRunning ? "AI monitoring for errors..." : "No errors detected"}
-              </div>
-            ) : (
-              <div className="glass-panel-strong p-4 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-mono text-xs font-semibold text-foreground">{aiAnalysis.error_type || "Error Detected"}</span>
-                  <span className="font-mono text-[10px] font-bold text-destructive">AI Analyzed</span>
-                </div>
-                <div className="font-mono text-[11px] text-muted-foreground space-y-1">
-                  <p><span className="text-secondary">Component:</span> {aiAnalysis.affected_component}</p>
-                  <p><span className="text-primary">🎯 Root Cause:</span> {aiAnalysis.root_cause}</p>
-                  <p><span className="text-emerald-400">💡 Fix:</span> {aiAnalysis.suggested_fix}</p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <div className="flex-1 h-1 rounded-full bg-muted/20 overflow-hidden">
-                      <div className="h-full rounded-full bg-emerald-400" style={{ width: `${(aiAnalysis.confidence || 0) * 100}%` }} />
-                    </div>
-                    <span className="text-[10px] text-emerald-400">{Math.round((aiAnalysis.confidence || 0) * 100)}%</span>
-                  </div>
-                </div>
-                <div className="flex gap-2 mt-3">
-                  <button
-                    onClick={() => setShowDiagnosis(true)}
-                    className="font-mono text-[10px] px-3 py-1.5 rounded-lg border border-primary/30 text-primary hover:bg-primary/10 transition-colors flex items-center gap-1"
-                  >
-                    <Brain className="w-3 h-3" /> Full Diagnosis
-                  </button>
-                  <button
-                    onClick={() => setShowFix(true)}
-                    className="font-mono text-[10px] px-3 py-1.5 rounded-lg border border-emerald-400/30 text-emerald-400 hover:bg-emerald-400/10 transition-colors flex items-center gap-1"
-                  >
-                    <Wrench className="w-3 h-3" /> Suggested Fix
-                  </button>
-                </div>
-              </div>
-            )}
+            <AIDiagnosisPanel
+              aiAnalysis={aiAnalysis}
+              isRunning={isRunning}
+              executionStatus={status}
+              onShowFull={() => setShowDiagnosis(true)}
+              onShowFix={() => setShowFix(true)}
+            />
           </GlassPanel>
         </div>
       )}
@@ -491,11 +670,26 @@ const Execute = () => {
               Enter a natural language command above to start AI-powered browser automation.
               Network requests, console logs, and AI analysis will appear here in real-time.
             </p>
+            <div className="text-left max-w-md mx-auto space-y-1">
+              {[
+                "Go to amazon.com, search for Moto Buds Plus, click first result, add to cart",
+                "Go to google.com and search for OpenAI",
+                "Go to example.com and take a screenshot",
+              ].map((example, i) => (
+                <button
+                  key={i}
+                  onClick={() => setCommand(example)}
+                  className="w-full text-left px-3 py-2 rounded-lg font-mono text-[11px] text-muted-foreground hover:text-primary hover:bg-primary/5 border border-glass-border/40 hover:border-primary/20 transition-colors"
+                >
+                  → {example}
+                </button>
+              ))}
+            </div>
           </div>
         </GlassPanel>
       )}
 
-      {/* Full Diagnosis Overlay */}
+      {/* Full Diagnosis Modal */}
       {createPortal(
         <AnimatePresence>
           {showDiagnosis && aiAnalysis && (
@@ -518,8 +712,17 @@ const Execute = () => {
                   </div>
                   <div className="space-y-3 font-mono text-[11px]">
                     <div className="p-3 rounded-lg bg-destructive/5 border border-destructive/15">
-                      <div className="flex items-center gap-1.5 mb-1"><AlertTriangle className="w-3 h-3 text-destructive" /><span className="font-semibold text-destructive">Error Type: {aiAnalysis.error_type}</span></div>
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <AlertTriangle className="w-3 h-3 text-destructive" />
+                        <span className="font-semibold text-destructive">Error Type: {aiAnalysis.error_type}</span>
+                        {aiAnalysis.impact_level && (
+                          <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-destructive/20 text-destructive">{aiAnalysis.impact_level}</span>
+                        )}
+                      </div>
                       <p className="text-muted-foreground">Affected: {aiAnalysis.affected_component}</p>
+                      {aiAnalysis.raw_error && (
+                        <p className="text-muted-foreground/60 text-[10px] mt-1 font-mono break-all">{aiAnalysis.raw_error}</p>
+                      )}
                     </div>
                     <div className="p-3 rounded-lg bg-primary/5 border border-primary/15">
                       <div className="flex items-center gap-1.5 mb-1"><Zap className="w-3 h-3 text-primary" /><span className="font-semibold text-primary">Root Cause Analysis</span></div>
@@ -538,7 +741,7 @@ const Execute = () => {
         document.body
       )}
 
-      {/* Fix Overlay */}
+      {/* Fix Modal */}
       {createPortal(
         <AnimatePresence>
           {showFix && aiAnalysis && (
@@ -587,6 +790,101 @@ const Execute = () => {
         </AnimatePresence>,
         document.body
       )}
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIX 2: AI Diagnosis Panel Component — always shows something meaningful
+// ─────────────────────────────────────────────────────────────────────────────
+const AIDiagnosisPanel = ({
+  aiAnalysis,
+  isRunning,
+  executionStatus,
+  onShowFull,
+  onShowFix,
+}: {
+  aiAnalysis: AIDiagnosisData | null;
+  isRunning: boolean;
+  executionStatus: StatusType;
+  onShowFull: () => void;
+  onShowFix: () => void;
+}) => {
+  if (!aiAnalysis) {
+    // FIX 2: Clear messages based on context instead of blank
+    if (isRunning) {
+      return (
+        <div className="font-mono text-xs text-muted-foreground text-center py-8 space-y-2">
+          <Brain className="w-8 h-8 text-primary/40 mx-auto animate-pulse" />
+          <p>AI monitoring for errors...</p>
+        </div>
+      );
+    }
+    if (executionStatus === "failure" || executionStatus === "partial") {
+      return (
+        <div className="font-mono text-xs text-center py-8 space-y-2">
+          <AlertCircle className="w-8 h-8 text-amber-400/60 mx-auto" />
+          <p className="text-amber-400/80">Error occurred but AI analysis is unavailable.</p>
+          <p className="text-muted-foreground text-[10px]">Check network logs for details.</p>
+        </div>
+      );
+    }
+    return (
+      <div className="font-mono text-xs text-center py-8 space-y-2">
+        <CheckCircle className="w-8 h-8 text-emerald-400/60 mx-auto" />
+        <p className="text-emerald-400/80">No errors detected during this execution</p>
+      </div>
+    );
+  }
+
+  const impactColor = {
+    Critical: "text-destructive",
+    High: "text-orange-400",
+    Medium: "text-amber-400",
+    Low: "text-emerald-400",
+  }[aiAnalysis.impact_level || "High"] || "text-amber-400";
+
+  return (
+    <div className="glass-panel-strong p-4 space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="font-mono text-xs font-semibold text-foreground">{aiAnalysis.error_type || "Error Detected"}</span>
+        <div className="flex items-center gap-1.5">
+          {aiAnalysis.impact_level && (
+            <span className={`font-mono text-[10px] font-bold ${impactColor}`}>{aiAnalysis.impact_level}</span>
+          )}
+          <span className="font-mono text-[10px] font-bold text-destructive">AI Analyzed</span>
+        </div>
+      </div>
+      <div className="font-mono text-[11px] text-muted-foreground space-y-1">
+        <p><span className="text-secondary">Component:</span> {aiAnalysis.affected_component}</p>
+        <p><span className="text-primary">🎯 Root Cause:</span> {aiAnalysis.root_cause}</p>
+        <p><span className="text-emerald-400">💡 Fix:</span> {aiAnalysis.suggested_fix}</p>
+        {aiAnalysis.raw_error && (
+          <p className="text-[10px] text-muted-foreground/50 truncate">
+            <span className="text-muted-foreground">Error:</span> {aiAnalysis.raw_error.slice(0, 80)}
+          </p>
+        )}
+        <div className="flex items-center gap-2 mt-1">
+          <div className="flex-1 h-1 rounded-full bg-muted/20 overflow-hidden">
+            <div className="h-full rounded-full bg-emerald-400" style={{ width: `${(aiAnalysis.confidence || 0) * 100}%` }} />
+          </div>
+          <span className="text-[10px] text-emerald-400">{Math.round((aiAnalysis.confidence || 0) * 100)}%</span>
+        </div>
+      </div>
+      <div className="flex gap-2 mt-3">
+        <button
+          onClick={onShowFull}
+          className="font-mono text-[10px] px-3 py-1.5 rounded-lg border border-primary/30 text-primary hover:bg-primary/10 transition-colors flex items-center gap-1"
+        >
+          <Brain className="w-3 h-3" /> Full Diagnosis
+        </button>
+        <button
+          onClick={onShowFix}
+          className="font-mono text-[10px] px-3 py-1.5 rounded-lg border border-emerald-400/30 text-emerald-400 hover:bg-emerald-400/10 transition-colors flex items-center gap-1"
+        >
+          <Wrench className="w-3 h-3" /> Suggested Fix
+        </button>
+      </div>
     </div>
   );
 };

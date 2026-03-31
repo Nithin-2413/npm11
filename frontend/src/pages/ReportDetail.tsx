@@ -248,7 +248,7 @@ const ReportDetail = () => {
         </GlassPanel>
       )}
 
-      {/* AI Tab */}
+      {/* AI Tab — FIX 2: Always shows meaningful content */}
       {activeTab === "ai" && (
         <div className="space-y-4">
           {report.ai_summary && (
@@ -256,30 +256,88 @@ const ReportDetail = () => {
               <p className="font-mono text-xs text-muted-foreground">{report.ai_summary}</p>
             </GlassPanel>
           )}
-          {report.ai_analysis ? (
-            <GlassPanel title="Error Analysis" icon="🧠" glow="pink">
-              <div className="space-y-3 font-mono text-[11px]">
-                <div className="p-3 rounded-lg bg-destructive/5 border border-destructive/15">
-                  <div className="text-destructive font-semibold mb-1">{report.ai_analysis.error_type}</div>
-                  <p className="text-muted-foreground">{report.ai_analysis.root_cause}</p>
-                </div>
-                <div className="p-3 rounded-lg bg-primary/5 border border-primary/15">
-                  <div className="text-primary font-semibold mb-1">Affected: {report.ai_analysis.affected_component}</div>
-                  <p className="text-muted-foreground">{report.ai_analysis.full_analysis}</p>
-                </div>
-                <div className="p-3 rounded-lg bg-emerald-400/5 border border-emerald-400/15">
-                  <div className="text-emerald-400 font-semibold mb-1">Suggested Fix</div>
-                  <p className="text-muted-foreground">{report.ai_analysis.suggested_fix}</p>
-                </div>
-              </div>
-            </GlassPanel>
-          ) : (
-            <GlassPanel glow="none">
-              <div className="text-center py-8 font-mono text-xs text-emerald-400">
-                No errors detected — execution completed successfully! 🎉
-              </div>
-            </GlassPanel>
-          )}
+
+          {/* FIX 2: Check ai_analysis from top-level AND from action_timeline entries */}
+          {(() => {
+            // Collect all AI analyses: top-level + per-action
+            const topLevelAnalysis = report.ai_analysis;
+            const actionAnalyses = (report.action_timeline || [])
+              .filter(a => a.ai_analysis)
+              .map(a => ({ action: a, analysis: a.ai_analysis }));
+
+            if (!topLevelAnalysis && actionAnalyses.length === 0) {
+              // FIX 2: Show contextual empty state
+              if (report.status === "FAILURE" || report.status === "PARTIAL") {
+                return (
+                  <GlassPanel glow="none">
+                    <div className="text-center py-8 font-mono text-xs space-y-2">
+                      <Brain className="w-8 h-8 text-amber-400/40 mx-auto" />
+                      <p className="text-amber-400/80">Error occurred but AI analysis is unavailable.</p>
+                      <p className="text-muted-foreground text-[10px]">Check network logs for details.</p>
+                    </div>
+                  </GlassPanel>
+                );
+              }
+              return (
+                <GlassPanel glow="none">
+                  <div className="text-center py-8 font-mono text-xs text-emerald-400">
+                    ✅ No errors detected — execution completed successfully! 🎉
+                  </div>
+                </GlassPanel>
+              );
+            }
+
+            return (
+              <>
+                {topLevelAnalysis && (
+                  <GlassPanel title="Error Analysis" icon="🧠" glow="pink">
+                    <div className="space-y-3 font-mono text-[11px]">
+                      <div className="p-3 rounded-lg bg-destructive/5 border border-destructive/15">
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="text-destructive font-semibold">{topLevelAnalysis.error_type || "Error"}</div>
+                          {topLevelAnalysis.impact_level && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-destructive/20 text-destructive">{topLevelAnalysis.impact_level}</span>
+                          )}
+                        </div>
+                        <p className="text-muted-foreground">{topLevelAnalysis.root_cause}</p>
+                        {topLevelAnalysis.raw_error && (
+                          <p className="text-muted-foreground/50 text-[10px] mt-1 break-all font-mono">Raw: {topLevelAnalysis.raw_error}</p>
+                        )}
+                      </div>
+                      <div className="p-3 rounded-lg bg-primary/5 border border-primary/15">
+                        <div className="text-primary font-semibold mb-1">Affected: {topLevelAnalysis.affected_component}</div>
+                        <p className="text-muted-foreground">{topLevelAnalysis.full_analysis || topLevelAnalysis.root_cause}</p>
+                      </div>
+                      <div className="p-3 rounded-lg bg-emerald-400/5 border border-emerald-400/15">
+                        <div className="text-emerald-400 font-semibold mb-1">Suggested Fix</div>
+                        <p className="text-muted-foreground">{topLevelAnalysis.suggested_fix}</p>
+                      </div>
+                      {topLevelAnalysis.confidence !== undefined && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-muted-foreground">AI Confidence:</span>
+                          <div className="flex-1 h-1.5 rounded-full bg-muted/20 overflow-hidden">
+                            <div className="h-full rounded-full bg-emerald-400" style={{ width: `${Math.round((topLevelAnalysis.confidence || 0) * 100)}%` }} />
+                          </div>
+                          <span className="text-emerald-400 font-bold">{Math.round((topLevelAnalysis.confidence || 0) * 100)}%</span>
+                        </div>
+                      )}
+                    </div>
+                  </GlassPanel>
+                )}
+
+                {/* Per-action AI analyses */}
+                {actionAnalyses.map(({ action, analysis }, idx) => analysis && (
+                  <GlassPanel key={idx} title={`Step #${(action.action_index || 0) + 1} Error`} icon="⚡" glow="none">
+                    <div className="space-y-2 font-mono text-[11px]">
+                      <p><span className="text-destructive">Type:</span> <span className="text-muted-foreground">{analysis.error_type || "unknown"}</span></p>
+                      <p><span className="text-primary">Root Cause:</span> <span className="text-muted-foreground">{analysis.root_cause}</span></p>
+                      <p><span className="text-emerald-400">Fix:</span> <span className="text-muted-foreground">{analysis.suggested_fix}</span></p>
+                    </div>
+                  </GlassPanel>
+                ))}
+              </>
+            );
+          })()}
         </div>
       )}
     </div>

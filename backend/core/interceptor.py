@@ -9,9 +9,10 @@ logger = get_logger(__name__)
 
 
 class NetworkInterceptor:
-    def __init__(self, execution_id: str, on_update: Optional[Callable] = None):
+    def __init__(self, execution_id: str, on_update: Optional[Callable] = None, db=None):
         self.execution_id = execution_id
         self.on_update = on_update
+        self.db = db  # FIX 2: Database reference for saving AI analysis
         self.network_logs: List[Dict[str, Any]] = []
         self.console_logs: Deque[Dict[str, Any]] = deque(maxlen=100)
         self._request_timings: Dict[str, float] = {}
@@ -57,17 +58,31 @@ class NetworkInterceptor:
         if url.startswith(("chrome-extension://", "data:")):
             return
 
+        # FIX 2: Safely capture response body — never let failure suppress the error record
+        body = None
+        body_error = None
         try:
-            body = None
             if status < 300 and "json" in (response.headers.get("content-type") or ""):
                 try:
                     body = await asyncio.wait_for(response.text(), timeout=3)
                     if len(body) > 2000:
                         body = body[:2000] + "...[truncated]"
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                except asyncio.TimeoutError:
+                    body_error = "body_read_timeout"
+                except Exception as e:
+                    body_error = str(e)
+        except Exception as e:
+            body_error = str(e)
+
+        # FIX 2: For error responses, try to capture body for AI analysis
+        error_body = None
+        if status >= 400:
+            try:
+                error_body = await asyncio.wait_for(response.text(), timeout=3)
+                if len(error_body) > 1000:
+                    error_body = error_body[:1000] + "...[truncated]"
+            except Exception:
+                pass
 
         log = {
             "request_id": str(uuid.uuid4())[:8],
@@ -82,6 +97,10 @@ class NetworkInterceptor:
             "response_body": body,
             "is_error": status >= 400,
         }
+        if body_error:
+            log["body_read_error"] = body_error
+        if error_body:
+            log["error_body"] = error_body
 
         async with self._lock:
             self.network_logs.append(log)
@@ -95,10 +114,49 @@ class NetworkInterceptor:
                 "is_error": status >= 400,
             })
 
+        # FIX 2: For 4xx/5xx errors, trigger AI analysis and save to DB
+        if status >= 400 and self.db is not None:
+            asyncio.create_task(self._analyze_network_error(log))
+
+    async def _analyze_network_error(self, log: Dict) -> None:
+        """FIX 2: Analyze network errors with AI and save to execution document."""
+        try:
+            from core.llm_client import get_llm_client
+            llm = get_llm_client()
+
+            error_context = {
+                "error_type": "network",
+                "url": log.get("url"),
+                "method": log.get("method"),
+                "status": log.get("status"),
+                "error_message": f"HTTP {log.get('status')} error on {log.get('method')} {log.get('url')}",
+                "error_body": log.get("error_body", ""),
+                "execution_id": self.execution_id,
+            }
+
+            diagnosis = await llm.analyze_error(error_context)
+
+            # FIX 2: Save AI analysis to execution document in MongoDB
+            await self.db.executions.update_one(
+                {"execution_id": self.execution_id},
+                {"$set": {"ai_analysis": diagnosis}},
+            )
+            logger.info(f"[{self.execution_id}] Network error AI analysis saved for {log.get('url')}")
+        except Exception as e:
+            logger.error(f"[{self.execution_id}] Network error AI analysis failed: {e}")
+
     async def _handle_failed_request(self, request) -> None:
         url = request.url
         if url.startswith(("chrome-extension://", "data:")):
             return
+
+        # FIX 2: Safely get failure reason
+        failure_reason = "Request failed"
+        try:
+            failure_reason = request.failure or "Request failed"
+        except Exception:
+            pass
+
         log = {
             "request_id": str(uuid.uuid4())[:8],
             "execution_id": self.execution_id,
@@ -110,10 +168,20 @@ class NetworkInterceptor:
             "size_bytes": 0,
             "timestamp": time.time(),
             "is_error": True,
-            "error_message": request.failure or "Request failed",
+            "error_message": failure_reason,
         }
         async with self._lock:
             self.network_logs.append(log)
+
+        if self.on_update:
+            await self._emit("network_request", {
+                "url": url,
+                "method": log["method"],
+                "status": 0,
+                "duration_ms": 0,
+                "is_error": True,
+                "error": failure_reason,
+            })
 
     async def _emit(self, event_type: str, data: Dict) -> None:
         if self.on_update:

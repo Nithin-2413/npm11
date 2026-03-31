@@ -18,12 +18,33 @@ class ActionResult(BaseModel):
     details: Optional[str] = None
 
 
+class ActionResult(BaseModel):
+    action_index: int
+    action_type: str
+    selector: Optional[str] = None
+    value: Optional[str] = None
+    status: str  # success, failure, skipped
+    started_at: str
+    completed_at: Optional[str] = None
+    duration_ms: int = 0
+    error_message: Optional[str] = None
+    screenshot_path: Optional[str] = None
+    details: Optional[str] = None
+    description: Optional[str] = None
+    confidence: Optional[float] = None
+    used_fallback: Optional[bool] = None
+    was_refined: Optional[bool] = None
+    ai_analysis: Optional[Dict[str, Any]] = None
+
+
 class AIAnalysis(BaseModel):
     root_cause: str = ""
     affected_component: str = ""
     suggested_fix: str = ""
+    impact_level: str = "High"   # FIX 2: new required field
     confidence: float = 0.0
     error_type: str = ""
+    raw_error: str = ""          # FIX 2: new required field
     full_analysis: str = ""
 
 
