@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { GlassPanel } from "@/components/GlassPanel";
 import { StatusBadge, StatusType } from "@/components/StatusBadge";
 import { ActionBadge, ActionType } from "@/components/ActionBadge";
@@ -44,6 +44,7 @@ interface AIDiagnosisData {
 
 const Execute = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const [command, setCommand] = useState("");
   const [executionId, setExecutionId] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -80,6 +81,16 @@ const Execute = () => {
   const currentExecutionIdRef = useRef<string | null>(null);
 
   const BACKEND_URL = (import.meta.env.REACT_APP_BACKEND_URL as string || "").replace(/\/$/, "");
+
+  // FIX ISSUE 2: Read command from location state (passed from Dashboard)
+  useEffect(() => {
+    const state = location.state as { command?: string } | null;
+    if (state?.command) {
+      setCommand(state.command);
+      // Clear the location state to prevent re-populating on navigation
+      window.history.replaceState({}, document.title);
+    }
+  }, [location]);
 
   // Load blueprints for quick select
   useEffect(() => {

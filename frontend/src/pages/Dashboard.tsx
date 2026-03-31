@@ -126,7 +126,8 @@ const Dashboard = () => {
       }
     };
     fetchData();
-    const interval = setInterval(fetchData, 15000); // refresh every 15s
+    // FIX ISSUE 1: Increase polling interval to reduce perceived "reloads"
+    const interval = setInterval(fetchData, 60000); // refresh every 60s (was 15s)
     return () => clearInterval(interval);
   }, []);
 

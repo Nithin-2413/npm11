@@ -22,7 +22,16 @@ import NotFound from "./pages/NotFound";
 import Analytics from "./pages/Analytics";
 import Schedules from "./pages/Schedules";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      refetchOnMount: false,
+      refetchOnReconnect: false,
+      staleTime: 5 * 60 * 1000, // 5 minutes
+    },
+  },
+});
 
 // Apply theme from localStorage on startup
 function useThemeInit() {
