@@ -5,12 +5,25 @@ import path from "path";
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
   envPrefix: ["VITE_", "REACT_APP_"],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'ui-vendor': ['framer-motion', 'lucide-react'],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 1000,
+  },
   server: {
     host: "::",
     port: 3000,
     allowedHosts: true,
-    hmr: false, // Completely disable HMR
-    watch: null, // Disable file watching entirely
+    hmr: false,
+    watch: {
+      ignored: ["**/*"],  // Ignore everything - no watching at all
+    },
     middlewareMode: false,
     proxy: {
       "/api": {
