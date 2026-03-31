@@ -10,6 +10,20 @@ export default defineConfig(({ mode }) => ({
     port: 3000,
     allowedHosts: true,
     hmr: false,
+    watch: {
+      // CRITICAL FIX: Exclude backend directories to prevent HMR reload during test execution
+      ignored: [
+        "**/node_modules/**",
+        "**/.git/**",
+        "**/.emergent/**",
+        "**/backend/screenshots/**",
+        "**/backend/uploads/**",
+        "**/backend/logs/**",
+        "**/backend/traces/**",
+        "**/backend/**/*.log",
+        "/var/log/**",
+      ],
+    },
     proxy: {
       "/api": {
         target: "http://localhost:8001",
