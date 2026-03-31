@@ -378,6 +378,7 @@ async def execute_command(
         execution_id=execution_id,
         headless=options.get("headless", True),
         slow_mo=options.get("slow_mo", 0),
+        stealth_mode=options.get("stealth_mode", False),
         on_update=on_update,
     )
     interceptor = NetworkInterceptor(execution_id=execution_id, on_update=on_update, db=db)
@@ -728,6 +729,7 @@ async def execute_blueprint(
     agent = BrowserAgent(
         execution_id=execution_id,
         headless=options.get("headless", True),
+        stealth_mode=options.get("stealth_mode", False),
         on_update=on_update,
     )
     interceptor = NetworkInterceptor(execution_id=execution_id, on_update=on_update, db=db)

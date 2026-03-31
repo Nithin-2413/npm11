@@ -65,6 +65,7 @@ const Execute = () => {
   const [aiAnalysis, setAiAnalysis] = useState<AIDiagnosisData | null>(null);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
   const [latestScreenshot, setLatestScreenshot] = useState<string | null>(null);
+  const [stealthMode, setStealthMode] = useState(false);
 
   // ──────────────────────────────────────────────────────────────────────────
   // FIX 1: All WebSocket/execution state in refs — survives re-renders
@@ -378,7 +379,7 @@ const Execute = () => {
 
     try {
       addLog("system", `Starting: ${command}`);
-      const res = await executeCommand(command, { headless: true });
+      const res = await executeCommand(command, { headless: true, stealth_mode: stealthMode });
       setExecutionId(res.execution_id);
       currentExecutionIdRef.current = res.execution_id;
       addLog("info", `Execution ID: ${res.execution_id}`);
@@ -543,6 +544,22 @@ const Execute = () => {
                 )}
               </AnimatePresence>
             </div>
+            {/* Stealth Mode Toggle */}
+            <button
+              onClick={() => setStealthMode(!stealthMode)}
+              disabled={isRunning}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-mono text-xs border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                stealthMode
+                  ? "border-emerald-400/40 text-emerald-400 bg-emerald-400/10"
+                  : "border-glass-border text-muted-foreground hover:text-foreground hover:border-primary/30"
+              }`}
+              title="Enable stealth mode to avoid bot detection"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+              </svg>
+              Stealth {stealthMode ? "ON" : "OFF"}
+            </button>
           </div>
           {aiSummary && !isRunning && (
             <div className="p-3 rounded-lg bg-primary/5 border border-primary/20 font-mono text-[11px] text-muted-foreground">

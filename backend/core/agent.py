@@ -253,11 +253,13 @@ class BrowserAgent:
         execution_id: str,
         headless: bool = True,
         slow_mo: int = 0,
+        stealth_mode: bool = False,
         on_update: Optional[Callable] = None,
     ):
         self.execution_id = execution_id
         self.headless = headless
         self.slow_mo = slow_mo
+        self.stealth_mode = stealth_mode
         self.on_update = on_update
         self._browser = None
         self._context = None
@@ -267,25 +269,56 @@ class BrowserAgent:
 
     async def start(self):
         from playwright.async_api import async_playwright
+        
         self._playwright = await async_playwright().start()
+        
+        # Enhanced browser args for stealth
+        browser_args = [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+        ]
+        
+        if self.stealth_mode:
+            # Additional stealth args
+            browser_args.extend([
+                "--disable-blink-features=AutomationControlled",
+                "--disable-features=IsolateOrigins,site-per-process",
+                "--disable-web-security",
+            ])
+        
         self._browser = await self._playwright.chromium.launch(
             headless=self.headless,
             slow_mo=self.slow_mo,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-            ],
+            args=browser_args,
         )
+        
+        # Enhanced user agent for stealth
+        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        
         self._context = await self._browser.new_context(
             viewport={"width": 1280, "height": 800},
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+            user_agent=user_agent,
+            locale="en-US",
+            timezone_id="America/New_York",
         )
+        
+        # Apply stealth mode if enabled
+        if self.stealth_mode:
+            try:
+                from playwright_stealth import Stealth
+                stealth = Stealth()
+                await stealth.apply_stealth_async(self._context)
+                logger.info(f"[{self.execution_id}] Stealth mode ENABLED - bot detection evasion active")
+            except Exception as e:
+                logger.warning(f"Stealth mode failed to apply: {e}")
+        
         self._page = await self._context.new_page()
         timeout = int(os.environ.get("BROWSER_TIMEOUT", 30000))
         self._page.set_default_timeout(timeout)
-        logger.info(f"[{self.execution_id}] Browser started (headless={self.headless})")
+        
+        logger.info(f"[{self.execution_id}] Browser started (headless={self.headless}, stealth={self.stealth_mode})")
         return self._page
 
     async def close(self):
