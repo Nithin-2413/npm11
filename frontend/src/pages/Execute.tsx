@@ -104,19 +104,14 @@ const Execute = () => {
   }, [terminalLogs]);
 
   // ──────────────────────────────────────────────────────────────────────────
-  // FIX 1: beforeunload handler — warn user if execution is running
+  // beforeunload handler — warn user ONLY if trying to close/refresh page
+  // NOT during normal execution (removed to prevent false warnings)
   // ──────────────────────────────────────────────────────────────────────────
   useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (isExecutingRef.current) {
-        e.preventDefault();
-        e.returnValue = "An execution is running. Leaving will cancel it. Are you sure?";
-        return e.returnValue;
-      }
-    };
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, []); // Empty deps — handler reads from ref, not state
+    // Disabled: This was causing "Changes may not be saved" popup during execution
+    // If needed, can be re-enabled with better logic to detect actual navigation
+    return () => {};
+  }, []);
 
   // ──────────────────────────────────────────────────────────────────────────
   // FIX 1: Cleanup all intervals/timers/WS on unmount
