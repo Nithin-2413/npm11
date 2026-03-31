@@ -9,20 +9,9 @@ export default defineConfig(({ mode }) => ({
     host: "::",
     port: 3000,
     allowedHosts: true,
-    hmr: false,
-    watch: {
-      // CRITICAL FIX: Exclude backend directories AND disable watcher completely
-      usePolling: false,
-      ignored: [
-        "**/node_modules/**",
-        "**/.git/**",
-        "**/.emergent/**",
-        "**/backend/**",
-        "/var/log/**",
-        "/tmp/**",
-        "**/*.log",
-      ],
-    },
+    hmr: false, // Completely disable HMR
+    watch: null, // Disable file watching entirely
+    middlewareMode: false,
     proxy: {
       "/api": {
         target: "http://localhost:8001",
