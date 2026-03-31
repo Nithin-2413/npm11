@@ -4,8 +4,14 @@ import { toast } from "sonner";
 import {
   Monitor, Globe, Wifi, Brain, FileCode2, ClipboardList,
   Zap, Database, ChevronRight, Save, RotateCcw, Trash2,
-  TestTube
+  TestTube, Lock, Users, Copy, Eye, EyeOff, Plus, Key
 } from "lucide-react";
+import {
+  listSecrets, createSecret, deleteSecret, Secret,
+  listWebhooks, createWebhook, deleteWebhook, Webhook,
+  listBlueprints, Blueprint,
+  listWorkspaces, createWorkspace, inviteMember, Workspace
+} from "@/lib/api";
 
 interface SettingsSection {
   id: string;
@@ -20,7 +26,9 @@ const SECTIONS: SettingsSection[] = [
   { id: "ai", label: "AI & LLM", icon: <Brain className="w-4 h-4" /> },
   { id: "blueprints", label: "Blueprints", icon: <FileCode2 className="w-4 h-4" /> },
   { id: "reports", label: "Reports", icon: <ClipboardList className="w-4 h-4" /> },
-  { id: "integrations", label: "Integrations", icon: <Zap className="w-4 h-4" /> },
+  { id: "secrets", label: "Secrets", icon: <Lock className="w-4 h-4" /> },
+  { id: "cicd", label: "CI/CD", icon: <Zap className="w-4 h-4" /> },
+  { id: "team", label: "Team", icon: <Users className="w-4 h-4" /> },
   { id: "advanced", label: "Advanced", icon: <Database className="w-4 h-4" /> },
 ];
 
@@ -291,6 +299,12 @@ const Settings = () => {
             </div>
           </div>
         );
+      case "secrets":
+        return <SecretsSection />;
+      case "cicd":
+        return <CICDSection />;
+      case "team":
+        return <TeamSection />;
       case "integrations":
         return (
           <div className="space-y-4">
@@ -397,3 +411,355 @@ const Settings = () => {
 };
 
 export default Settings;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PART 2B: Secrets Section
+// ─────────────────────────────────────────────────────────────────────────────
+const SecretsSection = () => {
+  const [secrets, setSecrets] = useState<Secret[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [form, setForm] = useState({ name: "", type: "credentials", domain: "", username: "", password: "", url: "" });
+
+  useEffect(() => { loadSecrets(); }, []);
+  const loadSecrets = async () => {
+    setLoading(true);
+    try { const r = await listSecrets(); setSecrets(r.secrets); } catch {}
+    setLoading(false);
+  };
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await createSecret({
+        name: form.name, type: form.type, domain: form.domain || undefined,
+        data: { username: form.username, password: form.password, url: form.url },
+        tags: [],
+      });
+      toast.success("Secret stored securely!");
+      setShowAdd(false);
+      setForm({ name: "", type: "credentials", domain: "", username: "", password: "", url: "" });
+      await loadSecrets();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to save secret");
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try { await deleteSecret(id); toast.success("Secret deleted"); await loadSecrets(); }
+    catch { toast.error("Delete failed"); }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="font-mono text-xs text-muted-foreground">Store credentials securely — passwords encrypted at rest, never exposed in reports.</p>
+        <button onClick={() => setShowAdd(!showAdd)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-mono text-xs border border-primary/30 text-primary hover:bg-primary/10">
+          <Plus className="w-3 h-3" /> Add Secret
+        </button>
+      </div>
+      {showAdd && (
+        <form onSubmit={handleCreate} className="glass-panel-strong p-4 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="font-mono text-[10px] text-muted-foreground mb-1 block">Name *</label>
+              <input required value={form.name} onChange={e => setForm(f => ({...f, name: e.target.value}))} placeholder="My Amazon Account"
+                className="w-full font-mono text-xs bg-muted/10 border border-glass-border rounded-lg px-3 py-2 text-foreground/80 focus:outline-none focus:ring-1 focus:ring-primary/40" /></div>
+            <div><label className="font-mono text-[10px] text-muted-foreground mb-1 block">Domain</label>
+              <input value={form.domain} onChange={e => setForm(f => ({...f, domain: e.target.value}))} placeholder="amazon.in"
+                className="w-full font-mono text-xs bg-muted/10 border border-glass-border rounded-lg px-3 py-2 text-foreground/80 focus:outline-none focus:ring-1 focus:ring-primary/40" /></div>
+            <div><label className="font-mono text-[10px] text-muted-foreground mb-1 block">Username / Email</label>
+              <input value={form.username} onChange={e => setForm(f => ({...f, username: e.target.value}))} placeholder="user@example.com"
+                className="w-full font-mono text-xs bg-muted/10 border border-glass-border rounded-lg px-3 py-2 text-foreground/80 focus:outline-none focus:ring-1 focus:ring-primary/40" /></div>
+            <div><label className="font-mono text-[10px] text-muted-foreground mb-1 block">Password</label>
+              <input type="password" value={form.password} onChange={e => setForm(f => ({...f, password: e.target.value}))} placeholder="••••••••"
+                className="w-full font-mono text-xs bg-muted/10 border border-glass-border rounded-lg px-3 py-2 text-foreground/80 focus:outline-none focus:ring-1 focus:ring-primary/40" /></div>
+          </div>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => setShowAdd(false)} className="px-3 py-1.5 rounded-xl font-mono text-[10px] border border-glass-border text-muted-foreground">Cancel</button>
+            <button type="submit" className="px-3 py-1.5 rounded-xl font-mono text-[10px] bg-primary/20 border border-primary/30 text-primary">Save Encrypted</button>
+          </div>
+        </form>
+      )}
+      {loading ? <div className="font-mono text-xs text-muted-foreground">Loading...</div> : (
+        <div className="space-y-2">
+          {secrets.length === 0 && <div className="font-mono text-xs text-muted-foreground py-6 text-center">No secrets stored yet.</div>}
+          {secrets.map(s => (
+            <div key={s.secret_id} className="glass-panel-strong p-3 flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Key className="w-3.5 h-3.5 text-primary" />
+                  <span className="font-mono text-xs font-semibold text-foreground">{s.name}</span>
+                  <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-muted/20 text-muted-foreground">{s.type}</span>
+                </div>
+                <div className="font-mono text-[10px] text-muted-foreground mt-0.5">
+                  {s.domain && <span>Domain: {s.domain} · </span>}
+                  {s.data.username && <span>User: {s.data.username} · </span>}
+                  <span>Password: ***masked***</span>
+                </div>
+              </div>
+              <button onClick={() => handleDelete(s.secret_id)} className="p-1.5 rounded-lg text-destructive/40 hover:text-destructive hover:bg-destructive/10 transition-colors">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PART 5C: CI/CD Integration Section
+// ─────────────────────────────────────────────────────────────────────────────
+const CICDSection = () => {
+  const [webhooks, setWebhooks] = useState<Webhook[]>([]);
+  const [blueprints, setBlueprints] = useState<Blueprint[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [newWebhookSecret, setNewWebhookSecret] = useState("");
+  const [showSecret, setShowSecret] = useState<string | null>(null);
+  const [form, setForm] = useState({ name: "", blueprint_id: "", branch_filter: "" });
+  const BACKEND_URL = (import.meta.env.REACT_APP_BACKEND_URL as string || "").replace(/\/$/, "");
+
+  useEffect(() => { load(); }, []);
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [w, b] = await Promise.all([listWebhooks(), listBlueprints()]);
+      setWebhooks(w.webhooks); setBlueprints(b.blueprints);
+    } catch {}
+    setLoading(false);
+  };
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const r = await createWebhook({ name: form.name, blueprint_id: form.blueprint_id, branch_filter: form.branch_filter || undefined });
+      setNewWebhookSecret(r.secret_token);
+      toast.success("Webhook created! Save the secret token.");
+      setForm({ name: "", blueprint_id: "", branch_filter: "" });
+      setShowAdd(false);
+      await load();
+    } catch (err: unknown) { toast.error(err instanceof Error ? err.message : "Failed"); }
+  };
+
+  const handleDelete = async (id: string) => {
+    try { await deleteWebhook(id); toast.success("Webhook deleted"); await load(); }
+    catch { toast.error("Delete failed"); }
+  };
+
+  const copyText = (text: string) => {
+    navigator.clipboard.writeText(text);
+    toast.success("Copied!");
+  };
+
+  return (
+    <div className="space-y-4">
+      {newWebhookSecret && (
+        <div className="p-3 rounded-lg bg-amber-400/10 border border-amber-400/30">
+          <p className="font-mono text-xs text-amber-400 mb-1">⚠ Save this token now — it won't be shown again!</p>
+          <div className="flex items-center gap-2">
+            <code className="font-mono text-xs text-foreground/80 flex-1 truncate">{newWebhookSecret}</code>
+            <button onClick={() => copyText(newWebhookSecret)} className="p-1.5 rounded border border-amber-400/30 text-amber-400 hover:bg-amber-400/20">
+              <Copy className="w-3 h-3" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between">
+        <p className="font-mono text-xs text-muted-foreground">Register webhooks to trigger blueprint runs from GitHub/GitLab CI pipelines.</p>
+        <button onClick={() => setShowAdd(!showAdd)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-mono text-xs border border-primary/30 text-primary hover:bg-primary/10">
+          <Plus className="w-3 h-3" /> Add Webhook
+        </button>
+      </div>
+
+      {showAdd && (
+        <form onSubmit={handleCreate} className="glass-panel-strong p-4 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="font-mono text-[10px] text-muted-foreground mb-1 block">Webhook Name *</label>
+              <input required value={form.name} onChange={e => setForm(f => ({...f, name: e.target.value}))} placeholder="On PR Merge: Smoke Tests"
+                className="w-full font-mono text-xs bg-muted/10 border border-glass-border rounded-lg px-3 py-2 text-foreground/80 focus:outline-none focus:ring-1 focus:ring-primary/40" /></div>
+            <div><label className="font-mono text-[10px] text-muted-foreground mb-1 block">Blueprint *</label>
+              <select required value={form.blueprint_id} onChange={e => setForm(f => ({...f, blueprint_id: e.target.value}))}
+                className="w-full font-mono text-xs bg-muted/10 border border-glass-border rounded-lg px-3 py-2 text-foreground/80 focus:outline-none focus:ring-1 focus:ring-primary/40">
+                <option value="">Select...</option>
+                {blueprints.map(b => <option key={b.blueprint_id} value={b.blueprint_id}>{b.name}</option>)}
+              </select></div>
+            <div><label className="font-mono text-[10px] text-muted-foreground mb-1 block">Branch Filter</label>
+              <input value={form.branch_filter} onChange={e => setForm(f => ({...f, branch_filter: e.target.value}))} placeholder="main"
+                className="w-full font-mono text-xs bg-muted/10 border border-glass-border rounded-lg px-3 py-2 text-foreground/80 focus:outline-none focus:ring-1 focus:ring-primary/40" /></div>
+          </div>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => setShowAdd(false)} className="px-3 py-1.5 rounded-xl font-mono text-[10px] border border-glass-border text-muted-foreground">Cancel</button>
+            <button type="submit" className="px-3 py-1.5 rounded-xl font-mono text-[10px] bg-primary/20 border border-primary/30 text-primary">Create Webhook</button>
+          </div>
+        </form>
+      )}
+
+      {loading ? <div className="font-mono text-xs text-muted-foreground">Loading...</div> : (
+        <div className="space-y-3">
+          {webhooks.length === 0 && <div className="font-mono text-xs text-muted-foreground py-6 text-center">No webhooks yet.</div>}
+          {webhooks.map(w => {
+            const triggerUrl = `${BACKEND_URL}/api/webhooks/trigger/${w.webhook_id}`;
+            const yamlSnippet = `- name: Run NPM Tests\n  run: |\n    curl -X POST ${triggerUrl} \\\n      -H "X-Webhook-Secret: YOUR_SECRET"`;
+            return (
+              <div key={w.webhook_id} className="glass-panel-strong p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="font-mono text-xs font-semibold text-foreground">{w.name}</span>
+                    <div className="font-mono text-[10px] text-muted-foreground">Blueprint: {w.blueprint_name} · Triggers: {w.trigger_count}</div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => setShowSecret(showSecret === w.webhook_id ? null : w.webhook_id)} className="p-1.5 rounded border border-glass-border text-muted-foreground hover:text-foreground">
+                      {showSecret === w.webhook_id ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                    </button>
+                    <button onClick={() => handleDelete(w.webhook_id)} className="p-1.5 rounded border border-destructive/20 text-destructive/50 hover:text-destructive">
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+                {showSecret === w.webhook_id && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <code className="font-mono text-[10px] text-muted-foreground flex-1 truncate">Token: {w.secret_token_preview}</code>
+                      <button onClick={() => copyText(triggerUrl)} className="font-mono text-[10px] flex items-center gap-1 px-2 py-1 rounded border border-primary/30 text-primary hover:bg-primary/10">
+                        <Copy className="w-2.5 h-2.5" /> Copy URL
+                      </button>
+                    </div>
+                    <div className="relative">
+                      <pre className="font-mono text-[9px] text-muted-foreground bg-muted/10 rounded-lg p-3 overflow-x-auto">{yamlSnippet}</pre>
+                      <button onClick={() => copyText(yamlSnippet)} className="absolute top-1 right-1 p-1 rounded border border-glass-border text-muted-foreground hover:text-foreground">
+                        <Copy className="w-2.5 h-2.5" />
+                      </button>
+                    </div>
+                    <p className="font-mono text-[9px] text-muted-foreground">CLI: <code>python npm_cli.py run --blueprint {w.blueprint_id} --wait --server {BACKEND_URL}</code></p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PART 4C: Team & Workspace Section
+// ─────────────────────────────────────────────────────────────────────────────
+const TeamSection = () => {
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [activeWs, setActiveWs] = useState<Workspace | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [showCreate, setShowCreate] = useState(false);
+  const [wsName, setWsName] = useState("");
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("viewer");
+
+  useEffect(() => { load(); }, []);
+  const load = async () => {
+    setLoading(true);
+    try {
+      const r = await listWorkspaces();
+      setWorkspaces(r.workspaces);
+      if (r.workspaces.length > 0) setActiveWs(r.workspaces[0]);
+    } catch {}
+    setLoading(false);
+  };
+
+  const handleCreateWs = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await createWorkspace({ name: wsName });
+      toast.success("Workspace created!");
+      setShowCreate(false); setWsName("");
+      await load();
+    } catch (err: unknown) { toast.error(err instanceof Error ? err.message : "Failed"); }
+  };
+
+  const handleInvite = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeWs) return;
+    try {
+      await inviteMember(activeWs.workspace_id, { email: inviteEmail, role: inviteRole });
+      toast.success(`Invited ${inviteEmail} as ${inviteRole}`);
+      setInviteEmail("");
+      await load();
+    } catch (err: unknown) { toast.error(err instanceof Error ? err.message : "Failed"); }
+  };
+
+  const roleColor = (role: string) => role === "admin" ? "text-destructive" : role === "editor" ? "text-primary" : "text-muted-foreground";
+
+  return (
+    <div className="space-y-4">
+      {loading ? <div className="font-mono text-xs text-muted-foreground">Loading...</div> : (
+        <>
+          {workspaces.length === 0 ? (
+            <div className="text-center py-8 space-y-3">
+              <Users className="w-8 h-8 text-muted-foreground/40 mx-auto" />
+              <p className="font-mono text-xs text-muted-foreground">No workspaces yet.</p>
+              <button onClick={() => setShowCreate(true)} className="mx-auto flex items-center gap-1.5 px-3 py-2 rounded-xl font-mono text-xs border border-primary/30 text-primary hover:bg-primary/10">
+                <Plus className="w-3 h-3" /> Create Workspace
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 flex-wrap">
+                  {workspaces.map(ws => (
+                    <button key={ws.workspace_id} onClick={() => setActiveWs(ws)}
+                      className={`font-mono text-xs px-3 py-1.5 rounded-xl border transition-colors ${activeWs?.workspace_id === ws.workspace_id ? "border-primary/40 bg-primary/10 text-primary" : "border-glass-border text-muted-foreground hover:text-foreground"}`}>
+                      {ws.name}
+                    </button>
+                  ))}
+                </div>
+                <button onClick={() => setShowCreate(true)} className="flex items-center gap-1 font-mono text-[10px] px-2 py-1.5 rounded-xl border border-glass-border text-muted-foreground hover:text-foreground">
+                  <Plus className="w-3 h-3" /> New
+                </button>
+              </div>
+
+              {activeWs && (
+                <div className="space-y-3">
+                  <form onSubmit={handleInvite} className="glass-panel-strong p-3 flex items-center gap-2">
+                    <input required value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} placeholder="user@example.com"
+                      className="flex-1 font-mono text-xs bg-muted/10 border border-glass-border rounded-lg px-3 py-2 text-foreground/80 focus:outline-none focus:ring-1 focus:ring-primary/40" />
+                    <select value={inviteRole} onChange={e => setInviteRole(e.target.value)}
+                      className="font-mono text-xs bg-muted/10 border border-glass-border rounded-lg px-2 py-2 text-foreground/80 focus:outline-none">
+                      <option value="viewer">Viewer</option>
+                      <option value="editor">Editor</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                    <button type="submit" className="px-3 py-2 rounded-xl font-mono text-[10px] bg-primary/20 border border-primary/30 text-primary whitespace-nowrap">Invite</button>
+                  </form>
+
+                  <div className="space-y-1">
+                    {activeWs.members.length === 0 && <div className="font-mono text-xs text-muted-foreground py-4 text-center">No members yet — invite someone!</div>}
+                    {activeWs.members.map(m => (
+                      <div key={m.user_id} className="glass-panel-strong p-3 flex items-center justify-between">
+                        <div>
+                          <span className="font-mono text-xs text-foreground/80">{m.name || m.email}</span>
+                          <div className="font-mono text-[10px] text-muted-foreground">{m.email}</div>
+                        </div>
+                        <span className={`font-mono text-[10px] font-bold uppercase ${roleColor(m.role)}`}>{m.role}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {showCreate && (
+            <form onSubmit={handleCreateWs} className="glass-panel-strong p-3 flex items-center gap-2">
+              <input required value={wsName} onChange={e => setWsName(e.target.value)} placeholder="Team name..."
+                className="flex-1 font-mono text-xs bg-muted/10 border border-glass-border rounded-lg px-3 py-2 text-foreground/80 focus:outline-none focus:ring-1 focus:ring-primary/40" />
+              <button type="submit" className="px-3 py-2 rounded-xl font-mono text-[10px] bg-primary/20 border border-primary/30 text-primary">Create</button>
+              <button type="button" onClick={() => setShowCreate(false)} className="px-3 py-2 rounded-xl font-mono text-[10px] border border-glass-border text-muted-foreground">Cancel</button>
+            </form>
+          )}
+        </>
+      )}
+    </div>
+  );
+};

@@ -225,3 +225,169 @@ export interface NetworkRequest {
   response_body?: string;
   ai_analysis?: { root_cause: string; suggested_fix: string };
 }
+
+
+// ─────────────── Secrets (PART 2B) ───────────────
+export interface Secret {
+  secret_id: string;
+  name: string;
+  type: string;
+  domain?: string;
+  data: Record<string, string>;  // password always masked in UI
+  tags: string[];
+  created_at: string;
+  last_used?: string;
+}
+
+export const listSecrets = () =>
+  request<{ secrets: Secret[]; total: number }>("/api/secrets");
+
+export const createSecret = (data: {
+  name: string; type: string; domain?: string;
+  data: Record<string, string>; tags?: string[];
+}) => request<{ secret_id: string; message: string }>("/api/secrets", { method: "POST", body: JSON.stringify(data) });
+
+export const updateSecret = (id: string, data: Partial<Secret>) =>
+  request<{ message: string }>(`/api/secrets/${id}`, { method: "PUT", body: JSON.stringify(data) });
+
+export const deleteSecret = (id: string) =>
+  request<{ message: string }>(`/api/secrets/${id}`, { method: "DELETE" });
+
+// ─────────────── Schedules (PART 3B) ───────────────
+export interface Schedule {
+  schedule_id: string;
+  name: string;
+  blueprint_id: string;
+  blueprint_name?: string;
+  variables: Record<string, string>;
+  cron_expression: string;
+  timezone: string;
+  is_active: boolean;
+  is_paused: boolean;
+  last_run?: string;
+  last_status?: string;
+  next_run?: string;
+  notification_on_failure: boolean;
+  created_at: string;
+  run_count: number;
+  success_count: number;
+  failure_count: number;
+}
+
+export const listSchedules = () =>
+  request<{ schedules: Schedule[]; total: number }>("/api/schedules");
+
+export const createSchedule = (data: {
+  name: string; blueprint_id: string; cron_expression: string;
+  timezone?: string; variables?: Record<string, string>; notification_on_failure?: boolean;
+}) => request<{ schedule_id: string; message: string }>("/api/schedules", { method: "POST", body: JSON.stringify(data) });
+
+export const updateSchedule = (id: string, data: Partial<Schedule>) =>
+  request<{ message: string }>(`/api/schedules/${id}`, { method: "PUT", body: JSON.stringify(data) });
+
+export const deleteSchedule = (id: string) =>
+  request<{ message: string }>(`/api/schedules/${id}`, { method: "DELETE" });
+
+export const pauseSchedule = (id: string) =>
+  request<{ message: string }>(`/api/schedules/${id}/pause`, { method: "POST" });
+
+export const resumeSchedule = (id: string) =>
+  request<{ message: string }>(`/api/schedules/${id}/resume`, { method: "POST" });
+
+export const runScheduleNow = (id: string) =>
+  request<{ execution_id: string; message: string }>(`/api/schedules/${id}/run-now`, { method: "POST" });
+
+export const getScheduleHistory = (id: string) =>
+  request<{ history: Execution[]; schedule_id: string }>(`/api/schedules/${id}/history`);
+
+// ─────────────── Workspaces (PART 4B) ───────────────
+export interface WorkspaceMember {
+  user_id: string; email: string; name?: string; role: string; joined_at: string;
+}
+export interface Workspace {
+  workspace_id: string; name: string; owner_id: string;
+  members: WorkspaceMember[];
+  settings: Record<string, boolean>;
+  created_at: string;
+}
+
+export const listWorkspaces = () =>
+  request<{ workspaces: Workspace[]; total: number }>("/api/workspaces");
+
+export const createWorkspace = (data: { name: string }) =>
+  request<{ workspace_id: string; message: string }>("/api/workspaces", { method: "POST", body: JSON.stringify(data) });
+
+export const inviteMember = (workspace_id: string, data: { email: string; name?: string; role: string }) =>
+  request<{ message: string; member: WorkspaceMember }>(`/api/workspaces/${workspace_id}/invite`, { method: "POST", body: JSON.stringify(data) });
+
+export const updateMemberRole = (workspace_id: string, user_id: string, role: string) =>
+  request<{ message: string }>(`/api/workspaces/${workspace_id}/members/${user_id}`, { method: "PUT", body: JSON.stringify({ role }) });
+
+export const removeMember = (workspace_id: string, user_id: string) =>
+  request<{ message: string }>(`/api/workspaces/${workspace_id}/members/${user_id}`, { method: "DELETE" });
+
+export const getWorkspaceActivity = (workspace_id: string) =>
+  request<{ activity: Execution[]; workspace_id: string }>(`/api/workspaces/${workspace_id}/activity`);
+
+// ─────────────── Webhooks (PART 5A) ───────────────
+export interface Webhook {
+  webhook_id: string; name: string; secret_token?: string; secret_token_preview?: string;
+  blueprint_id: string; blueprint_name?: string;
+  variables: Record<string, string>;
+  trigger_on: string[];
+  branch_filter?: string;
+  is_active: boolean;
+  created_at: string;
+  last_triggered?: string;
+  trigger_count: number;
+}
+
+export const listWebhooks = () =>
+  request<{ webhooks: Webhook[]; total: number }>("/api/webhooks");
+
+export const createWebhook = (data: {
+  name: string; blueprint_id: string; trigger_on?: string[];
+  branch_filter?: string; variables?: Record<string, string>;
+}) => request<{ webhook_id: string; secret_token: string; message: string }>("/api/webhooks", { method: "POST", body: JSON.stringify(data) });
+
+export const deleteWebhook = (id: string) =>
+  request<{ message: string }>(`/api/webhooks/${id}`, { method: "DELETE" });
+
+// ─────────────── Analytics (PART 6) ───────────────
+export interface TimeSeriesPoint {
+  timestamp: string;
+  total_executions: number;
+  success_count: number;
+  failure_count: number;
+  partial_count: number;
+  avg_duration_seconds: number;
+  avg_performance_score: number;
+}
+
+export interface FlakyBlueprint {
+  blueprint_id: string; name: string; failure_rate: number;
+  total_runs: number; success_count: number; failure_count: number;
+  last_failure_reason: string; failure_pattern: string; recommendation: string;
+}
+
+export interface Regression {
+  blueprint_id: string; name: string;
+  avg_duration_recent_s: number; avg_duration_prev_s: number;
+  change_percent: number; severity: string; recommendation: string;
+}
+
+export const getTimeSeries = (period = "7d", granularity = "day") =>
+  request<{ period: string; granularity: string; data: TimeSeriesPoint[] }>(
+    `/api/analytics/timeseries?period=${period}&granularity=${granularity}`
+  );
+
+export const getFlakyBlueprints = () =>
+  request<{ flaky_blueprints: FlakyBlueprint[]; total: number }>("/api/analytics/flaky");
+
+export const getPerformanceRegressions = () =>
+  request<{ regressions: Regression[]; total: number }>("/api/analytics/regressions");
+
+export const getTopBlueprints = (limit = 5) =>
+  request<{ blueprints: { blueprint_id: string; name: string; usage_count: number; success_rate: number }[] }>(
+    `/api/analytics/top-blueprints?limit=${limit}`
+  );

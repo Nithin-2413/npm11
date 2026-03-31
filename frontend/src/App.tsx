@@ -19,6 +19,8 @@ import Profile from "./pages/Profile";
 import Login from "./pages/Login";
 import Onboarding from "./pages/Onboarding";
 import NotFound from "./pages/NotFound";
+import Analytics from "./pages/Analytics";
+import Schedules from "./pages/Schedules";
 
 const queryClient = new QueryClient();
 
@@ -63,6 +65,8 @@ const App = () => {
               <Route path="/reports" element={<Reports />} />
               <Route path="/reports/:id" element={<ReportDetail />} />
               <Route path="/network" element={<Network />} />
+              <Route path="/analytics" element={<Analytics />} />
+              <Route path="/schedules" element={<Schedules />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/profile" element={<Profile />} />
             </Route>

@@ -56,6 +56,170 @@ def is_cancelled(execution_id: str) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PART 1C: Decision Engine — handles ambiguous states autonomously
+# ─────────────────────────────────────────────────────────────────────────────
+class DecisionEngine:
+    """Makes smart decisions when the agent encounters ambiguous situations."""
+
+    async def handle_ambiguous_state(
+        self, agent, page, failed_action: Dict, ctx: "ExecutionContext", llm
+    ) -> Optional[Dict]:
+        """
+        Called when an action fails. Try to handle common ambiguous states
+        and return a recovery action or None.
+        """
+        # 1. Handle popups/modals that might be blocking
+        dismissed = await agent.handle_popups_and_banners()
+        if dismissed:
+            logger.info(f"[{ctx.execution_id}] Handled ambiguous state: dismissed {dismissed}")
+            return failed_action  # Retry the same action
+
+        # 2. Detect search results page — if user wants to click a result
+        if await self._is_search_results_page(page):
+            action_desc = failed_action.get("description", "").lower()
+            if any(k in action_desc for k in ["click", "result", "product", "item"]):
+                # Auto-select first relevant result
+                result_selectors = [
+                    ".s-result-item:first-child h2 a",
+                    "[data-component-type='s-search-result']:first-child h2 a",
+                    "li.product-item:first-child a",
+                    ".product-card:first-child a",
+                    ".search-result:first-child a",
+                    "[class*='result']:first-child a",
+                    "article:first-child a",
+                ]
+                for sel in result_selectors:
+                    try:
+                        loc = page.locator(sel).first
+                        if await loc.count() > 0 and await loc.is_visible():
+                            logger.info(f"[{ctx.execution_id}] Decision: Auto-clicking first search result via {sel}")
+                            return {**failed_action, "selector": sel, "was_ambiguity_resolved": True,
+                                    "description": "Click first search result (auto-decided)"}
+                    except Exception:
+                        pass
+
+        # 3. Detect product variants page — auto-select first available option
+        if await self._needs_variant_selection(page):
+            variant_action = await self._auto_select_variant(page, ctx)
+            if variant_action:
+                return variant_action
+
+        # 4. Ask LLM to analyze page state and suggest next action
+        try:
+            page_html = await agent.get_page_html()
+            url = page.url
+            suggestion = await llm.refine_action_on_failure(
+                failed_action=failed_action,
+                error_message="Action failed due to ambiguous page state",
+                page_html=page_html,
+                page_url=url,
+                context=ctx.to_dict(),
+            )
+            if suggestion:
+                logger.info(f"[{ctx.execution_id}] Decision: LLM resolved ambiguous state")
+                return {**suggestion, "was_ambiguity_resolved": True}
+        except Exception as e:
+            logger.error(f"Decision engine LLM failed: {e}")
+
+        return None
+
+    async def score_search_results(
+        self, page, search_term: str
+    ) -> List[Dict]:
+        """
+        Score search results by relevance to original search term.
+        Returns sorted list of results with scores.
+        """
+        results = []
+        result_selectors = [
+            ".s-result-item", "[data-component-type='s-search-result']",
+            ".product-item", ".product-card", ".search-result", "article[class*='product']"
+        ]
+
+        for sel in result_selectors:
+            try:
+                items = page.locator(sel)
+                count = await items.count()
+                if count > 0:
+                    for i in range(min(count, 5)):
+                        item = items.nth(i)
+                        try:
+                            title = await item.locator("h2, h3, [class*='title'], [class*='name']").first.inner_text()
+                        except Exception:
+                            title = ""
+                        terms = search_term.lower().split()
+                        title_lower = title.lower()
+                        # Score: title match (40%) + position (20%) = base score
+                        match_count = sum(1 for t in terms if t in title_lower)
+                        match_score = (match_count / len(terms)) * 0.6 if terms else 0
+                        position_score = max(0, (5 - i) / 5) * 0.4
+                        score = match_score + position_score
+                        results.append({"index": i, "title": title, "score": score, "selector_base": sel})
+
+                    if results:
+                        return sorted(results, key=lambda x: x["score"], reverse=True)
+            except Exception:
+                pass
+
+        return results
+
+    async def _is_search_results_page(self, page) -> bool:
+        """Detect if current page is a search results page."""
+        url = page.url.lower()
+        if any(k in url for k in ["search", "query", "q=", "find", "results"]):
+            return True
+        try:
+            content = await page.content()
+            return any(k in content.lower() for k in ["search results", "results for", "showing results"])
+        except Exception:
+            return False
+
+    async def _needs_variant_selection(self, page) -> bool:
+        """Check if product page needs variant selection before add-to-cart."""
+        variant_selectors = [
+            "[data-feature-name='swatch_color_click']",
+            "[id*='variation' i]", "[class*='variation' i]",
+            "[class*='variant' i]", "[data-option-name]",
+        ]
+        for sel in variant_selectors:
+            try:
+                if await page.locator(sel).count() > 0:
+                    return True
+            except Exception:
+                pass
+        return False
+
+    async def _auto_select_variant(self, page, ctx) -> Optional[Dict]:
+        """Auto-select first available (non-OOS) product variant."""
+        variant_selectors = [
+            "[data-feature-name='swatch_color_click'] li:first-child",
+            "[id*='variation' i] option:not([disabled]):first-child",
+            "[class*='variant' i] button:not([disabled]):first-child",
+        ]
+        for sel in variant_selectors:
+            try:
+                loc = page.locator(sel).first
+                if await loc.count() > 0:
+                    text = ""
+                    try:
+                        text = await loc.inner_text()
+                    except Exception:
+                        pass
+                    logger.info(f"[{ctx.execution_id}] Decision: Auto-selecting variant: {text or sel}")
+                    return {
+                        "type": "click",
+                        "selector": sel,
+                        "description": f"Auto-select first available variant: {text}",
+                        "confidence": 0.7,
+                        "was_ambiguity_resolved": True,
+                        "optional": True,
+                    }
+            except Exception:
+                pass
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # FIX 3: ExecutionContext — short-term memory for the execution engine
 # ─────────────────────────────────────────────────────────────────────────────
 @dataclass
@@ -87,27 +251,29 @@ class ExecutionContext:
 # ─────────────────────────────────────────────────────────────────────────────
 # FIX 3: Intelligent action execution with fallback selectors + LLM refinement
 # ─────────────────────────────────────────────────────────────────────────────
+_decision_engine = DecisionEngine()
+
+
 async def execute_action_with_intelligence(
     agent: BrowserAgent,
     action: Dict[str, Any],
-    ctx: ExecutionContext,
+    ctx: "ExecutionContext",
     llm,
 ) -> Dict[str, Any]:
     """
-    Execute an action with:
-    1. Primary selector attempt
-    2. Fallback selectors if primary fails
-    3. LLM refinement if all fallbacks fail
-    4. Mark as optional/skip if truly unresolvable
+    PART 1D: Full 5-step failure recovery loop:
+    Step 1: Primary selector
+    Step 2: Fallback selectors
+    Step 3: LLM refinement
+    Step 4: Handle ambiguous state (popups, etc.)
+    Step 5: Mark as PARTIAL/optional skip
     """
     action_type = action.get("type", "")
     fallback_selectors = action.get("fallback_selectors", [])
 
-    # First attempt with primary selector
+    # Step 1: Primary selector attempt
     result = await agent.execute_action(action)
-
     if result["status"] == "success":
-        # Update context with success
         ctx.completed_actions.append({
             "type": action_type,
             "selector": action.get("selector"),
@@ -115,62 +281,69 @@ async def execute_action_with_intelligence(
         })
         return result
 
-    # Primary failed — try fallback selectors
-    if fallback_selectors and action.get("type") in ("click", "fill", "assert", "hover", "wait"):
+    # Step 2: Fallback selectors
+    if fallback_selectors and action_type in ("click", "fill", "assert", "hover", "wait"):
         for i, fallback_sel in enumerate(fallback_selectors):
-            logger.info(f"[{ctx.execution_id}] Trying fallback selector {i+1}: {fallback_sel}")
-            fallback_action = {**action, "selector": fallback_sel}
-            fallback_result = await agent.execute_action(fallback_action)
-            if fallback_result["status"] == "success":
-                fallback_result["used_fallback"] = True
-                fallback_result["fallback_index"] = i
+            logger.info(f"[{ctx.execution_id}] Fallback selector {i+1}: {fallback_sel}")
+            fb_result = await agent.execute_action({**action, "selector": fallback_sel})
+            if fb_result["status"] == "success":
+                fb_result["used_fallback"] = True
+                fb_result["fallback_index"] = i
                 ctx.completed_actions.append({
-                    "type": action_type,
-                    "selector": fallback_sel,
+                    "type": action_type, "selector": fallback_sel,
                     "description": action.get("description", "") + f" (fallback {i+1})",
                 })
-                logger.info(f"[{ctx.execution_id}] Fallback selector {i+1} succeeded")
-                return fallback_result
+                logger.info(f"[{ctx.execution_id}] Fallback {i+1} succeeded")
+                return fb_result
 
-    # All fallbacks failed — ask LLM to refine the action
-    logger.info(f"[{ctx.execution_id}] All selectors failed, asking LLM to refine action...")
+    # Step 3: LLM refinement
+    logger.info(f"[{ctx.execution_id}] Asking LLM to refine action...")
     try:
+        page = agent._page
         page_html = await agent.get_page_html()
-        page_url = ctx.current_url or "unknown"
+        page_url = ctx.current_url or (page.url if page else "unknown")
         error_msg = result.get("error_message", "Element not found")
 
-        refined_action = await llm.refine_action_on_failure(
-            failed_action=action,
-            error_message=error_msg,
-            page_html=page_html,
-            page_url=page_url,
-            context=ctx.to_dict(),
+        refined = await llm.refine_action_on_failure(
+            failed_action=action, error_message=error_msg,
+            page_html=page_html, page_url=page_url, context=ctx.to_dict(),
         )
-
-        if refined_action:
-            logger.info(f"[{ctx.execution_id}] LLM refined action, retrying...")
-            refined_result = await agent.execute_action(refined_action)
+        if refined:
+            refined_result = await agent.execute_action(refined)
             if refined_result["status"] == "success":
                 refined_result["was_refined"] = True
                 ctx.completed_actions.append({
-                    "type": action_type,
-                    "selector": refined_action.get("selector"),
+                    "type": action_type, "selector": refined.get("selector"),
                     "description": action.get("description", "") + " (LLM refined)",
                 })
-                logger.info(f"[{ctx.execution_id}] LLM-refined action succeeded!")
+                logger.info(f"[{ctx.execution_id}] LLM refinement succeeded")
                 return refined_result
-            else:
-                logger.warning(f"[{ctx.execution_id}] LLM-refined action also failed")
-                result = refined_result  # Use the refined result for error reporting
+            result = refined_result
     except Exception as e:
         logger.error(f"[{ctx.execution_id}] LLM refinement error: {e}")
 
-    # All attempts exhausted
+    # Step 4: Handle ambiguous state (popups, variant selection, etc.)
+    logger.info(f"[{ctx.execution_id}] Checking for ambiguous state...")
+    try:
+        page = agent._page
+        recovery = await _decision_engine.handle_ambiguous_state(agent, page, action, ctx, llm)
+        if recovery:
+            recovery_result = await agent.execute_action(recovery)
+            if recovery_result["status"] == "success":
+                recovery_result["was_ambiguity_resolved"] = True
+                ctx.completed_actions.append({
+                    "type": action_type, "selector": recovery.get("selector"),
+                    "description": action.get("description", "") + " (ambiguity resolved)",
+                })
+                logger.info(f"[{ctx.execution_id}] Ambiguity resolution succeeded")
+                return recovery_result
+    except Exception as e:
+        logger.error(f"[{ctx.execution_id}] Ambiguity handler error: {e}")
+
+    # Step 5: All failed
     ctx.failed_actions.append({
-        "type": action_type,
-        "selector": action.get("selector"),
-        "error": result.get("error_message"),
-        "description": action.get("description", ""),
+        "type": action_type, "selector": action.get("selector"),
+        "error": result.get("error_message"), "description": action.get("description", ""),
     })
     return result
 
@@ -216,9 +389,20 @@ async def execute_command(
     )
 
     try:
-        # Step 1: Parse command with LLM
+        # Step 1: Parse command with LLM (PART 1B: with implicit step expansion + PART 2C: secrets)
         await broadcast(execution_id, {"type": "status", "message": "Parsing command with AI..."})
-        actions = await llm.parse_command_to_actions(command)
+
+        # Load available secret names for injection hint
+        available_secrets = []
+        try:
+            async for s in db.secrets.find({}, {"name": 1, "domain": 1}):
+                name = s.get("name", "")
+                domain = s.get("domain", "")
+                available_secrets.append(f"{name} ({domain})" if domain else name)
+        except Exception:
+            pass
+
+        actions = await llm.parse_command_to_actions(command, available_secrets=available_secrets if available_secrets else None)
 
         if not actions:
             raise ValueError("LLM returned no actions")

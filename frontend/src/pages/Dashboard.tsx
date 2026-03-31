@@ -10,7 +10,7 @@ import {
   Play, FileCode2, Camera, RotateCcw, ChevronDown, ChevronRight,
   ArrowUpRight, Eye, Loader2
 } from "lucide-react";
-import { getReportStats, listReports, listBlueprints, Execution, Blueprint } from "@/lib/api";
+import { getReportStats, listReports, listBlueprints, listSchedules, Execution, Blueprint, Schedule } from "@/lib/api";
 
 // Portal-based dropdown to avoid overflow clipping
 const BlueprintDropdown = ({ open, onToggle, onClose, onSelect, blueprints }: {
@@ -99,19 +99,26 @@ const Dashboard = () => {
   } | null>(null);
   const [recentExecs, setRecentExecs] = useState<Execution[]>([]);
   const [blueprintsList, setBlueprintsList] = useState<Blueprint[]>([]);
+  const [upcomingSchedules, setUpcomingSchedules] = useState<Schedule[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [statsData, reportsData, bpData] = await Promise.all([
+        const [statsData, reportsData, bpData, schedData] = await Promise.all([
           getReportStats(),
           listReports({ page: 1, page_size: 10 }),
           listBlueprints({ page_size: 20 } as never),
+          listSchedules().catch(() => ({ schedules: [] })),
         ]);
         setStats(statsData);
         setRecentExecs(reportsData.reports);
         setBlueprintsList(bpData.blueprints);
+        const upcoming = schedData.schedules
+          .filter(s => s.is_active && !s.is_paused && s.next_run)
+          .sort((a, b) => new Date(a.next_run!).getTime() - new Date(b.next_run!).getTime())
+          .slice(0, 5);
+        setUpcomingSchedules(upcoming);
       } catch (err) {
         console.error("Dashboard fetch error:", err);
       } finally {
@@ -356,8 +363,8 @@ const Dashboard = () => {
         {[
           { label: "New Blueprint", icon: "📐", path: "/blueprints/create" },
           { label: "View Reports", icon: "📋", path: "/reports" },
-          { label: "Network Logs", icon: "🔮", path: "/network" },
-          { label: "Settings", icon: "⚙️", path: "/settings" },
+          { label: "Analytics", icon: "📊", path: "/analytics" },
+          { label: "Schedules", icon: "⏰", path: "/schedules" },
         ].map((action) => (
           <Link
             key={action.label}
@@ -370,6 +377,29 @@ const Dashboard = () => {
           </Link>
         ))}
       </div>
+
+      {/* Upcoming Schedules widget */}
+      {upcomingSchedules.length > 0 && (
+        <GlassPanel title="Upcoming Scheduled Runs" icon="⏰" glow="cyan" delay={0.3}>
+          <div className="space-y-2">
+            {upcomingSchedules.map((s) => (
+              <div key={s.schedule_id} className="flex items-center justify-between font-mono text-xs">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-primary/60" />
+                  <span className="text-foreground/80">{s.name}</span>
+                  <span className="text-muted-foreground text-[10px]">{s.blueprint_name}</span>
+                </div>
+                <div className="text-right">
+                  <div className="text-muted-foreground text-[10px]">
+                    {s.next_run ? new Date(s.next_run).toLocaleString() : "—"}
+                  </div>
+                  <div className="text-[10px] text-primary">{s.cron_expression}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </GlassPanel>
+      )}
     </div>
   );
 };

@@ -136,27 +136,63 @@ class LLMClient:
         wait=wait_exponential(multiplier=1, min=2, max=10),
         reraise=True,
     )
-    async def parse_command_to_actions(self, command: str) -> List[Dict[str, Any]]:
-        """Convert natural language command to list of Playwright actions with full metadata."""
+    async def expand_command_with_implicit_steps(self, command: str) -> str:
+        """
+        PART 1B: Pre-processing step that expands a high-level command into a
+        detailed step list with all implicit actions added.
+        """
         try:
-            logger.info(f"Parsing command: {command[:80]}...")
+            logger.info(f"Expanding command with implicit steps: {command[:60]}...")
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": COMMAND_PARSE_PROMPT},
-                    {"role": "user", "content": command},
+                    {"role": "system", "content": IMPLICIT_STEPS_PROMPT},
+                    {"role": "user", "content": f"Expand this command: {command}"},
+                ],
+                temperature=0.2,
+                max_tokens=1024,
+            )
+            expanded = response.choices[0].message.content.strip()
+            logger.info(f"Expanded to {len(expanded.splitlines())} steps")
+            return expanded
+        except Exception as e:
+            logger.error(f"Command expansion failed: {e}")
+            return command  # Fall back to original command
+
+    async def parse_command_to_actions(self, command: str, available_secrets: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Convert natural language command to list of Playwright actions with full metadata."""
+        try:
+            # PART 1B: Expand command with implicit steps first
+            expanded_command = await self.expand_command_with_implicit_steps(command)
+
+            # PART 2C: Build secrets hint for prompt
+            secrets_hint = ""
+            if available_secrets:
+                secrets_list = "\n".join(f"  - {s}" for s in available_secrets)
+                secrets_hint = f"""
+STORED CREDENTIALS AVAILABLE:
+{secrets_list}
+
+If the command mentions logging in or references a site matching stored credentials,
+inject a use_secret action: {{"type": "use_secret", "secret_name": "Secret Name", "description": "Use stored credentials", "fields": ["username", "password"]}}
+"""
+
+            logger.info(f"Parsing expanded command ({len(expanded_command.splitlines())} steps)...")
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": COMMAND_PARSE_PROMPT + secrets_hint},
+                    {"role": "user", "content": f"Original command: {command}\n\nExpanded steps:\n{expanded_command}"},
                 ],
                 temperature=0.1,
-                max_tokens=3000,
+                max_tokens=4000,
                 response_format={"type": "json_object"},
             )
             content = response.choices[0].message.content
             data = json.loads(content)
 
-            # Handle both old format ({"actions": [...]}) and new format with metadata
             actions = data.get("actions", [])
 
-            # Attach metadata to each action if missing
             for action in actions:
                 if "confidence" not in action:
                     action["confidence"] = 0.8
@@ -165,7 +201,6 @@ class LLMClient:
                 if "fallback_selectors" not in action and action.get("type") in ("click", "fill", "assert", "hover"):
                     action["fallback_selectors"] = []
 
-            # Log metadata
             goal = data.get("goal_summary", "")
             site = data.get("site_detected", "generic")
             complexity = data.get("complexity", "medium")
@@ -307,6 +342,31 @@ Find the correct CSS selector in this HTML and return the fixed action JSON only
         except Exception as e:
             logger.error(f"Summary generation failed: {e}")
             return f"Execution {'completed successfully' if execution_data.get('status') == 'SUCCESS' else 'failed'} in {execution_data.get('duration_seconds', 0):.1f}s."
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PART 1B: Implicit Step Inference
+# ─────────────────────────────────────────────────────────────────────────────
+IMPLICIT_STEPS_PROMPT = """You are a browser automation expert. A user has given a high-level command.
+Your job is to expand it into a complete, unambiguous step list by adding all the implicit steps a human would naturally do.
+
+IMPLICIT STEP RULES:
+1. After typing in a search box → always add "press Enter or click the search button"
+2. After navigating to a page → always add "wait for the page to fully load"
+3. Before clicking a button that may be below the fold → add "scroll to make it visible"
+4. After clicking a product in search results → add "wait for product page to load"
+5. Before filling a form field → add "click the field to focus it"
+6. After clicking Add to Cart → add "wait for cart confirmation"
+7. If a login wall might appear → add "check if login is required, if so use stored credentials"
+8. For dropdown/select elements → add "wait for options to appear before selecting"
+9. If a popup or modal might block the action → add "close any popup or cookie banner first"
+10. After any action that loads new content → add "wait for network to be idle"
+11. For product searches → add "click on the first relevant search result"
+12. For multi-step forms → add "wait for each step to load before proceeding"
+
+Return the expanded step list as a clean numbered list. Be thorough but not redundant.
+Keep the user's original intent exactly. Do not change what they asked for.
+Return ONLY the numbered list, no extra text."""
 
 
 _llm_client: Optional[LLMClient] = None

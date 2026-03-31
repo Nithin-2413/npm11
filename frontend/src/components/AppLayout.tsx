@@ -10,7 +10,8 @@ import { AnimatedAvatar, AvatarAnimal, getAvatarEmoji } from "@/components/Anima
 import {
   LayoutDashboard, Play, FileCode2, FileText,
   Settings, Menu, Search,
-  ChevronLeft, Keyboard, User, LogOut, Sun, Moon
+  ChevronLeft, Keyboard, User, LogOut, Sun, Moon,
+  BarChart2, Clock, Globe, Wifi
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -18,6 +19,9 @@ const NAV_ITEMS = [
   { label: "Execute", icon: Play, path: "/execute", shortcut: "G E", color: "theme-green" },
   { label: "Blueprints", icon: FileCode2, path: "/blueprints", shortcut: "G B", color: "theme-violet" },
   { label: "Reports", icon: FileText, path: "/reports", shortcut: "G R", color: "theme-orange" },
+  { label: "Network", icon: Wifi, path: "/network", shortcut: "G N", color: "theme-cyan" },
+  { label: "Analytics", icon: BarChart2, path: "/analytics", shortcut: "G A", color: "theme-pink" },
+  { label: "Schedules", icon: Clock, path: "/schedules", shortcut: "G C", color: "theme-amber" },
   { label: "Settings", icon: Settings, path: "/settings", shortcut: "G S", color: "theme-pistachio" },
 ];
 
@@ -29,6 +33,8 @@ const NAV_COLOR_CLASSES: Record<string, { bg: string; text: string; border: stri
   "theme-pink":      { bg: "bg-theme-pink/10",      text: "text-theme-pink",      border: "border-theme-pink/20",      glow: "" },
   "theme-pistachio": { bg: "bg-theme-pistachio/10", text: "text-theme-pistachio", border: "border-theme-pistachio/20", glow: "" },
   "theme-blueberry": { bg: "bg-theme-blueberry/10", text: "text-theme-blueberry", border: "border-theme-blueberry/20", glow: "" },
+  "theme-cyan":      { bg: "bg-primary/10",         text: "text-primary",         border: "border-primary/20",         glow: "" },
+  "theme-amber":     { bg: "bg-amber-400/10",       text: "text-amber-400",       border: "border-amber-400/20",       glow: "" },
 };
 
 const AppLayout = () => {
