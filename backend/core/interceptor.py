@@ -53,20 +53,37 @@ class NetworkInterceptor:
         duration_ms = int((time.time() - start) * 1000)
         status = response.status
         url = response.url
+        request = response.request
 
         # Skip browser internals / extensions
         if url.startswith(("chrome-extension://", "data:")):
             return
 
-        # FIX 2: Safely capture response body — never let failure suppress the error record
-        body = None
+        # Capture request body (for POST/PUT/PATCH)
+        request_body = None
+        if request.method in ["POST", "PUT", "PATCH"]:
+            try:
+                post_data = request.post_data
+                if post_data and len(post_data) < 10000:  # Limit to 10KB
+                    request_body = post_data
+                elif post_data:
+                    request_body = post_data[:10000] + "...[truncated]"
+            except Exception:
+                pass
+
+        # Capture response body (for all successful requests)
+        response_body = None
         body_error = None
         try:
-            if status < 300 and "json" in (response.headers.get("content-type") or ""):
+            content_type = response.headers.get("content-type", "").lower()
+            # Capture text-based responses
+            if any(t in content_type for t in ["json", "text", "html", "xml", "javascript", "css"]):
                 try:
-                    body = await asyncio.wait_for(response.text(), timeout=3)
-                    if len(body) > 2000:
-                        body = body[:2000] + "...[truncated]"
+                    body_text = await asyncio.wait_for(response.text(), timeout=5)
+                    if len(body_text) > 50000:  # Limit to 50KB
+                        response_body = body_text[:50000] + "...[truncated]"
+                    else:
+                        response_body = body_text
                 except asyncio.TimeoutError:
                     body_error = "body_read_timeout"
                 except Exception as e:
@@ -74,7 +91,7 @@ class NetworkInterceptor:
         except Exception as e:
             body_error = str(e)
 
-        # FIX 2: For error responses, try to capture body for AI analysis
+        # For error responses, try to capture body for AI analysis
         error_body = None
         if status >= 400:
             try:
@@ -88,13 +105,14 @@ class NetworkInterceptor:
             "request_id": str(uuid.uuid4())[:8],
             "execution_id": self.execution_id,
             "url": url,
-            "method": response.request.method,
+            "method": request.method,
             "status": status,
             "content_type": response.headers.get("content-type", ""),
             "duration_ms": duration_ms,
             "size_bytes": int(response.headers.get("content-length") or 0),
             "timestamp": time.time(),
-            "response_body": body,
+            "request_body": request_body,
+            "response_body": response_body,
             "is_error": status >= 400,
         }
         if body_error:
