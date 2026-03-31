@@ -108,14 +108,29 @@ app = FastAPI(
     redoc_url="/api/redoc",
 )
 
-# CORS
+# CORS - Critical for external frontend access
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
+
+# OPTIONS handler MUST come before routers
+@app.options("/{full_path:path}")
+async def options_handler(full_path: str):
+    """Handle CORS preflight OPTIONS requests for all paths."""
+    return JSONResponse(
+        content={"message": "OK"},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Max-Age": "86400",
+        },
+    )
 
 # All routers
 app.include_router(execute_router)

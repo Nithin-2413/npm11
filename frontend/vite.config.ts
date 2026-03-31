@@ -11,17 +11,16 @@ export default defineConfig(({ mode }) => ({
     allowedHosts: true,
     hmr: false,
     watch: {
-      // CRITICAL FIX: Exclude backend directories to prevent HMR reload during test execution
+      // CRITICAL FIX: Exclude backend directories AND disable watcher completely
+      usePolling: false,
       ignored: [
         "**/node_modules/**",
         "**/.git/**",
         "**/.emergent/**",
-        "**/backend/screenshots/**",
-        "**/backend/uploads/**",
-        "**/backend/logs/**",
-        "**/backend/traces/**",
-        "**/backend/**/*.log",
+        "**/backend/**",
         "/var/log/**",
+        "/tmp/**",
+        "**/*.log",
       ],
     },
     proxy: {
