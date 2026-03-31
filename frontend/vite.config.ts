@@ -15,14 +15,22 @@ export default defineConfig(({ mode }) => ({
       },
     },
     chunkSizeWarningLimit: 1000,
+    minify: 'esbuild',
+    target: 'es2015',
+  },
+  optimizeDeps: {
+    include: ['react', 'react-dom', 'react-router-dom'],
+    exclude: [],
   },
   server: {
     host: "::",
     port: 3000,
-    allowedHosts: true,
+    strictPort: true,
     hmr: false,
     watch: {
-      ignored: ["**/*"],  // Ignore everything - no watching at all
+      ignored: ['**/*'],
+      useFsEvents: false,
+      usePolling: false,
     },
     middlewareMode: false,
     proxy: {
