@@ -78,10 +78,6 @@ export const deleteBlueprint = (blueprint_id: string) =>
 export const duplicateBlueprint = (blueprint_id: string) =>
   api.post(`/api/blueprints/${blueprint_id}/duplicate`).then((r) => r.data);
 
-// NEW: Run blueprint
-export const runBlueprint = (blueprint_id: string, variables: any = {}) =>
-  api.post(`/api/blueprints/${blueprint_id}/run`, { variables }).then((r) => r.data);
-
 // Network
 export const getNetworkLogs = (execution_id: string) =>
   api.get(`/api/network/${execution_id}`).then((r) => r.data);
@@ -89,6 +85,12 @@ export const getNetworkLogs = (execution_id: string) =>
 // Schedules
 export const listSchedules = (params?: any) =>
   api.get("/api/schedules", { params }).then((r) => r.data);
+
+export const createSchedule = (data: any) =>
+  api.post("/api/schedules", data).then((r) => r.data);
+
+export const deleteSchedule = (schedule_id: string) =>
+  api.delete(`/api/schedules/${schedule_id}`).then((r) => r.data);
 
 // Secrets
 export const listSecrets = (params?: any) =>
@@ -137,7 +139,7 @@ export const getTopBlueprints = (params?: any) =>
   api.get("/api/analytics/top-blueprints", { params }).then((r) => r.data);
 
 export const runBlueprint = (blueprint_id: string, variables?: any) =>
-  api.post(`/api/blueprints/${blueprint_id}/run`, { variables }).then((r) => r.data);
+  executeBlueprint(blueprint_id, variables);
 
 // Types
 export interface Execution {
