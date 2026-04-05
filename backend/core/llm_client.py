@@ -82,26 +82,59 @@ Return a JSON object with this EXACT structure:
 """
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FIX 2: Updated ERROR_ANALYSIS_PROMPT with exact required structure
+# FIX 2: Enhanced ERROR_ANALYSIS_PROMPT with deep contextual RCA
 # ─────────────────────────────────────────────────────────────────────────────
-ERROR_ANALYSIS_PROMPT = """You are an expert QA engineer and browser automation specialist. Analyze this execution failure and provide a detailed diagnosis.
+ERROR_ANALYSIS_PROMPT = """You are an expert QA engineer and browser automation specialist with deep debugging experience.
 
-Return a JSON object with EXACTLY these fields (all required):
+**YOUR MISSION:** Perform a thorough root cause analysis (RCA) of this execution failure. Go beyond surface-level symptoms to identify the ACTUAL underlying cause.
+
+**ANALYSIS FRAMEWORK:**
+
+1. **ROOT CAUSE IDENTIFICATION:**
+   - Don't just repeat the error message - explain WHY it happened
+   - Consider: Was the selector wrong? Did the page structure change? Timing issue? Network failure?
+   - Example: Instead of "Element not found", say "The product title selector '.product-name' no longer exists because Amazon redesigned their search results page to use '.puis-title' instead"
+
+2. **CONTEXTUAL INVESTIGATION:**
+   - Analyze the action sequence: What actions led up to this failure?
+   - Check timing: Did we wait for the page to load? Did AJAX content finish loading?
+   - Network context: Were there API failures? Slow responses? CORS errors?
+   - Page state: Was there a popup blocking the element? Overlay? Modal?
+
+3. **ACTIONABLE FIX:**
+   - Provide SPECIFIC, implementable solutions
+   - Include exact selector updates, wait times, or sequence changes
+   - Example: "Add a 'wait for networkidle' after the search click, then update selector to '.puis-title .a-text-normal'"
+
+4. **IMPACT ASSESSMENT:**
+   - Critical: Complete execution blocker, no workaround possible
+   - High: Major feature broken, requires immediate fix
+   - Medium: Degraded functionality, workaround available
+   - Low: Minor issue, doesn't block core flow
+
+**RETURN JSON with these EXACT fields:**
 {
-  "root_cause": "What specifically caused the failure - be precise",
-  "affected_component": "Which part of the page, API, or system failed",
-  "suggested_fix": "Exact actionable fix the developer can apply right now",
+  "root_cause": "Deep technical explanation of WHY the failure occurred (2-3 sentences)",
+  "affected_component": "Specific page element, API endpoint, or system component that failed",
+  "suggested_fix": "Exact, actionable steps to fix this issue (be specific with selectors, timing, etc)",
   "impact_level": "Critical|High|Medium|Low",
   "confidence": 0.85,
-  "error_type": "network|selector|timeout|assertion|unknown",
-  "raw_error": "The original raw error message"
+  "error_type": "network|selector|timeout|assertion|javascript|authentication|unknown",
+  "raw_error": "The original raw error message",
+  "full_analysis": "Comprehensive 4-5 sentence technical breakdown covering: what failed, why it failed, what was expected vs actual, and environmental factors",
+  "similar_errors": ["List of related errors that might have the same root cause"],
+  "prevention_tips": "How to prevent this error in future executions"
 }
 
-Also include these optional fields if helpful:
-{
-  "full_analysis": "Detailed multi-sentence analysis",
-  "alternative_selectors": ["...possible working selectors..."]
-}
+**EXAMPLES OF GOOD vs BAD ANALYSIS:**
+
+❌ BAD: "Element not found. Try using a different selector."
+✅ GOOD: "The checkout button selector '#checkout-btn' failed because Shopify's dynamic cart uses client-side rendering that takes 2-3 seconds to inject the button. The element exists in the DOM but wasn't yet rendered when we tried to click. Add a 'wait for selector' with timeout 5000ms before clicking."
+
+❌ BAD: "Network error occurred."
+✅ GOOD: "POST request to /api/cart failed with 503 Service Unavailable. The backend API is experiencing high load (>2s response times in previous requests). This is a transient infrastructure issue. Recommended: Implement retry logic with exponential backoff (3 attempts, 2s/4s/8s delays)."
+
+**ANALYZE WITH INTELLIGENCE:** Use the provided context (error message, action timeline, network logs, console errors) to build a complete picture of what went wrong and how to fix it.
 """
 
 SUMMARY_PROMPT = """You are a QA report writer. Generate a concise 2-3 sentence summary of this test execution.
@@ -213,23 +246,23 @@ inject a use_secret action: {{"type": "use_secret", "secret_name": "Secret Name"
             raise
 
     async def analyze_error(self, error_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze an execution error and return AI diagnosis with required structure."""
+        """Analyze an execution error and return comprehensive AI diagnosis with deep RCA."""
         try:
-            context_str = json.dumps(error_context, indent=2)[:4000]
+            context_str = json.dumps(error_context, indent=2)[:6000]  # Increased for more context
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": ERROR_ANALYSIS_PROMPT},
                     {"role": "user", "content": f"Analyze this failure:\n{context_str}"},
                 ],
-                temperature=0.2,
-                max_tokens=1024,
+                temperature=0.3,  # Slightly higher for creative RCA
+                max_tokens=1500,  # More tokens for comprehensive analysis
                 response_format={"type": "json_object"},
             )
             content = response.choices[0].message.content
             result = json.loads(content)
 
-            # Ensure all required fields are present with correct structure (FIX 2)
+            # Ensure all required fields are present with correct structure
             raw_error = error_context.get("error_message", "")
             normalized = {
                 "root_cause": result.get("root_cause", "Unknown failure"),
@@ -240,21 +273,25 @@ inject a use_secret action: {{"type": "use_secret", "secret_name": "Secret Name"
                 "error_type": result.get("error_type", "unknown"),
                 "raw_error": result.get("raw_error", str(raw_error)),
                 "full_analysis": result.get("full_analysis", result.get("root_cause", "")),
+                "similar_errors": result.get("similar_errors", []),
+                "prevention_tips": result.get("prevention_tips", ""),
             }
-            logger.info(f"Error analyzed: {normalized.get('error_type')} | confidence={normalized['confidence']}")
+            logger.info(f"Deep RCA completed: {normalized.get('error_type')} | impact={normalized['impact_level']} | confidence={normalized['confidence']}")
             return normalized
         except Exception as e:
             logger.error(f"Error analysis failed: {e}")
             raw_err = error_context.get("error_message", str(e))
             return {
-                "root_cause": f"Analysis failed: {e}",
+                "root_cause": f"Automated analysis unavailable. Raw error: {raw_err}",
                 "affected_component": "Unknown",
-                "suggested_fix": "Check server logs for details",
+                "suggested_fix": "Check execution logs and retry with modified selectors",
                 "impact_level": "High",
                 "confidence": 0.0,
                 "error_type": "unknown",
                 "raw_error": str(raw_err),
-                "full_analysis": f"Automated analysis failed. Original error: {raw_err}",
+                "full_analysis": f"AI analysis failed due to: {e}. Manual investigation required for error: {raw_err}",
+                "similar_errors": [],
+                "prevention_tips": "Enable debug logging and capture page state before failure",
             }
 
     async def refine_action_on_failure(

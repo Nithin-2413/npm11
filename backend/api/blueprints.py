@@ -163,3 +163,55 @@ async def get_blueprint_executions(blueprint_id: str, limit: int = Query(20)):
     ).sort("timestamp", -1).limit(limit)
     docs = await cursor.to_list(length=limit)
     return {"executions": docs, "total": len(docs)}
+
+
+
+@router.post("/executions/{execution_id}/save-as-blueprint", status_code=201)
+async def save_execution_as_blueprint(execution_id: str, blueprint_name: str):
+    """Save a completed execution as a reusable blueprint."""
+    db = get_db()
+    
+    # Get the execution
+    exec_doc = await db.executions.find_one({"execution_id": execution_id}, {"_id": 0})
+    if not exec_doc:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    
+    # Extract command (original user input)
+    original_command = exec_doc.get("original_command", "")
+    if not original_command:
+        raise HTTPException(status_code=400, detail="Execution has no command to save")
+    
+    # Extract variables from command
+    variables = extract_variables(original_command)
+    
+    # Create blueprint structure
+    blueprint_data = {
+        "blueprint_id": generate_id("bp"),
+        "name": blueprint_name or f"Blueprint from {execution_id[:8]}",
+        "description": f"Auto-saved from execution: {original_command}",
+        "version": "1.0",
+        "created_at": utcnow_str(),
+        "updated_at": utcnow_str(),
+        "command_template": original_command,  # Store original command
+        "variables": variables,
+        "actions": [],  # Simplified - just store command for now
+        "success_criteria": None,
+        "metadata": {
+            "tags": ["auto-saved"],
+            "success_rate": 1.0 if exec_doc.get("status") == "SUCCESS" else 0.0,
+            "usage_count": 0,
+            "avg_duration": exec_doc.get("duration", 0.0),
+            "source_execution_id": execution_id,
+        },
+    }
+    
+    # Save to database
+    await db.blueprints.insert_one(blueprint_data)
+    
+    logger.info(f"Saved execution {execution_id} as blueprint {blueprint_data['blueprint_id']}")
+    
+    return {
+        "blueprint_id": blueprint_data["blueprint_id"],
+        "name": blueprint_data["name"],
+        "message": "Blueprint saved successfully",
+    }
