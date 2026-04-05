@@ -255,7 +255,17 @@ const Reports = () => {
               <ChevronLeft className="w-3.5 h-3.5" />
             </button>
             {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => (
-
+              <button key={i} onClick={() => setPage(i + 1)}
+                className={`font-mono text-[10px] w-7 h-7 rounded-lg transition-colors ${page === i + 1 ? "bg-primary/20 text-primary border border-primary/30" : "text-muted-foreground hover:text-foreground"}`}
+              >{i + 1}</button>
+            ))}
+            <button onClick={() => setPage(Math.min(totalPages, page + 1))} disabled={page === totalPages}
+              className="p-1.5 rounded-lg border border-glass-border text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors">
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Save as Blueprint Modal */}
       {showSaveBpModal && createPortal(
@@ -304,17 +314,6 @@ const Reports = () => {
         document.body
       )}
 
-              <button key={i} onClick={() => setPage(i + 1)}
-                className={`font-mono text-[10px] w-7 h-7 rounded-lg transition-colors ${page === i + 1 ? "bg-primary/20 text-primary border border-primary/30" : "text-muted-foreground hover:text-foreground"}`}
-              >{i + 1}</button>
-            ))}
-            <button onClick={() => setPage(Math.min(totalPages, page + 1))} disabled={page === totalPages}
-              className="p-1.5 rounded-lg border border-glass-border text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors">
-              <ChevronRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
