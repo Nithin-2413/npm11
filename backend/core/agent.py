@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Optional
 from faker import Faker
 from utils.logger import get_logger
 from core.smart_popup import SmartPopupDetector
-from core.smart_checkbox import SmartCheckbox, SmartDropdown
+from core.smart_interactions import SmartInteractionEngine
 
 logger = get_logger(__name__)
 fake = Faker()
@@ -188,10 +188,6 @@ class SmartLocator:
 
         # ── Layer 4: Playwright resilient locators ─────────────────────────
         # Try page.get_by_role, get_by_text, get_by_placeholder
-        layer4_attempts = [
-            ("get_by_placeholder", words[0] if words else intent),
-            ("get_by_text", intent),
-        ]
         # Role-based heuristics
         if any(k in intent_lower for k in ["button", "click", "submit", "buy", "cart", "login"]):
             try:
@@ -268,6 +264,7 @@ class BrowserAgent:
         self._page = None
         self._playwright = None
         self.smart_locator = SmartLocator()
+        self.smart_interactions = None  # Initialized after page is ready
 
     async def start(self):
         from playwright.async_api import async_playwright
@@ -319,6 +316,9 @@ class BrowserAgent:
         self._page = await self._context.new_page()
         timeout = int(os.environ.get("BROWSER_TIMEOUT", 30000))
         self._page.set_default_timeout(timeout)
+        
+        # Initialize SmartInteractionEngine with the page
+        self.smart_interactions = SmartInteractionEngine(self._page)
         
         logger.info(f"[{self.execution_id}] Browser started (headless={self.headless}, stealth={self.stealth_mode})")
         return self._page
@@ -464,54 +464,101 @@ class BrowserAgent:
             url = action.get("url", action.get("value", ""))
             logger.info(f"Navigating to {url}")
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            # Auto-handle popups after navigation
+            # Auto-handle popups ONLY if command mentions popup-related keywords
             await asyncio.sleep(0.8)
-            await self.handle_popups_and_banners()
+            # Check if command intent includes popup handling
+            command_lower = intent.lower()
+            if any(keyword in command_lower for keyword in ["popup", "close", "dismiss", "banner", "cookie"]):
+                await self.handle_popups_and_banners()
 
         elif action_type == "fill":
             selector = action.get("selector", "")
             value = resolve_faker_value(action.get("value", ""))
-
-            # Try SmartLocator if selector fails
-            try:
-                await page.wait_for_selector(selector, state="visible", timeout=8000)
-                await page.click(selector)
-                await page.fill(selector, value)
-            except Exception:
+            
+            # Use SmartInteractionEngine for reliable form filling
+            success, msg = await self.smart_interactions.fill_form_field(selector, value)
+            if not success:
+                # Fallback: Try SmartLocator
                 try:
                     loc = await self.smart_locator.find(page, intent or "input field")
                     await loc.click()
                     await loc.fill(value)
                     logger.info(f"SmartLocator fill succeeded for intent: {intent}")
                 except SmartLocatorError:
-                    raise
+                    raise Exception(f"Fill failed: {msg}")
 
         elif action_type == "click":
             selector = action.get("selector", "")
-            try:
-                await page.wait_for_selector(selector, state="visible", timeout=8000)
-                await page.click(selector)
-            except Exception:
+            
+            # Use SmartInteractionEngine for reliable button clicking
+            success, msg = await self.smart_interactions.click_button(selector)
+            if not success:
+                # Fallback: Try SmartLocator
                 try:
                     loc = await self.smart_locator.find(page, intent or "clickable element")
                     await loc.click()
                     logger.info(f"SmartLocator click succeeded for intent: {intent}")
                 except SmartLocatorError:
-                    raise
+                    raise Exception(f"Click failed: {msg}")
+
+        elif action_type == "checkbox":
+            selector = action.get("selector", "")
+            should_check = action.get("checked", True)
+            
+            # Use SmartInteractionEngine for checkbox state verification
+            success, msg = await self.smart_interactions.set_checkbox(selector, should_check)
+            if not success:
+                raise Exception(f"Checkbox operation failed: {msg}")
+            logger.info(f"Checkbox operation: {msg}")
+
+        elif action_type == "radio":
+            selector = action.get("selector", "")
+            
+            # Use SmartInteractionEngine for radio button selection
+            success, msg = await self.smart_interactions.select_radio(selector)
+            if not success:
+                raise Exception(f"Radio selection failed: {msg}")
+            logger.info(f"Radio selection: {msg}")
 
         elif action_type == "select":
             selector = action.get("selector", "")
             value = action.get("value", "")
-            await page.wait_for_selector(selector, timeout=10000)
-            try:
-                await page.select_option(selector, label=value)
-            except Exception:
-                try:
-                    await page.select_option(selector, value=value)
-                except Exception:
-                    await page.click(selector)
-                    await asyncio.sleep(0.5)
-                    await page.get_by_text(value).first.click()
+            
+            # Use SmartInteractionEngine for dropdown handling (native & custom)
+            success, msg = await self.smart_interactions.select_dropdown(selector, value)
+            if not success:
+                raise Exception(f"Dropdown selection failed: {msg}")
+            logger.info(f"Dropdown selection: {msg}")
+
+        elif action_type == "verify" or action_type == "assert":
+            selector = action.get("selector", "body")
+            expected_text = action.get("text") or action.get("value", "")
+            
+            # Use SmartInteractionEngine for proper assertion (throws error on failure)
+            success, msg = await self.smart_interactions.verify_text_present(expected_text, selector)
+            if not success:
+                raise AssertionError(f"Verification failed: {msg}")
+            logger.info(f"Verification passed: {msg}")
+
+        elif action_type == "verify_state":
+            selector = action.get("selector", "")
+            expected_state = action.get("state", "visible")  # visible, hidden, checked, unchecked, enabled, disabled
+            
+            # Use SmartInteractionEngine for element state verification
+            success, msg = await self.smart_interactions.verify_element_state(selector, expected_state)
+            if not success:
+                raise AssertionError(f"State verification failed: {msg}")
+            logger.info(f"State verification passed: {msg}")
+
+        elif action_type == "sort":
+            selector = action.get("selector", "")
+            option = action.get("value", "")
+            
+            # Use SmartInteractionEngine for sorting (waits for results to update)
+            success, msg = await self.smart_interactions.apply_sort(selector, option)
+            if not success:
+                raise Exception(f"Sort operation failed: {msg}")
+            logger.info(f"Sort operation: {msg}")
 
         elif action_type == "wait":
             ms = action.get("ms", 1000)
@@ -573,13 +620,13 @@ class BrowserAgent:
                 await frame_loc.locator(inner_selector).click()
 
         elif action_type == "assert":
-            selector = action.get("selector", "")
-            expected_text = action.get("text")
-            await page.wait_for_selector(selector, state="visible", timeout=10000)
-            if expected_text:
-                text = await page.locator(selector).inner_text()
-                if expected_text.lower() not in text.lower():
-                    raise AssertionError(f"Expected '{expected_text}' not found in '{text[:100]}'")
+            # Legacy support - redirect to verify
+            selector = action.get("selector", "body")
+            expected_text = action.get("text", "")
+            success, msg = await self.smart_interactions.verify_text_present(expected_text, selector)
+            if not success:
+                raise AssertionError(f"Assertion failed: {msg}")
+            logger.info(f"Assertion passed: {msg}")
 
         elif action_type == "use_secret":
             # PART 2C: Handle stored secret injection at runtime
