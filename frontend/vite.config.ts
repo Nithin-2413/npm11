@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
+import disableHMR from "./vite-disable-hmr-plugin.js";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
@@ -33,6 +34,7 @@ export default defineConfig(({ mode }) => ({
       'localhost',
     ],
     hmr: false,
+    ws: false,  // CRITICAL: Disable WebSocket client completely
     watch: {
       ignored: ['**/*'],
       useFsEvents: false,
@@ -53,7 +55,7 @@ export default defineConfig(({ mode }) => ({
       },
     },
   },
-  plugins: [react()].filter(Boolean),
+  plugins: [react(), disableHMR()].filter(Boolean),
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
