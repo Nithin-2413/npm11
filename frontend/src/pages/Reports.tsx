@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback } from "react";
-import { createPortal } from "react-dom";
 import { motion } from "framer-motion";
 import { Link, useNavigate } from "react-router-dom";
 import { GlassPanel } from "@/components/GlassPanel";
@@ -7,9 +6,9 @@ import { StatusBadge, StatusType } from "@/components/StatusBadge";
 import { toast } from "sonner";
 import {
   Search, Download, Eye, Trash2,
-  ChevronLeft, ChevronRight, Globe, Loader2, RefreshCw, Save, X
+  ChevronLeft, ChevronRight, Globe, Loader2, RefreshCw
 } from "lucide-react";
-import { listReports, deleteReport, exportReport, Execution, saveExecutionAsBlueprint } from "@/lib/api";
+import { listReports, deleteReport, exportReport, Execution } from "@/lib/api";
 
 const Reports = () => {
   const navigate = useNavigate();
@@ -20,9 +19,6 @@ const Reports = () => {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [showSaveBpModal, setShowSaveBpModal] = useState(false);
-  const [blueprintName, setBlueprintName] = useState("");
-  const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
   const perPage = 8;
 
   const fetchReports = useCallback(async () => {
@@ -65,23 +61,6 @@ const Reports = () => {
       fetchReports();
     } catch {
       toast.error("Delete failed");
-    }
-  };
-
-  const handleSaveAsBlueprint = async () => {
-    if (!selectedExecutionId || !blueprintName.trim()) {
-      toast.error("Please enter a blueprint name");
-      return;
-    }
-    try {
-      const res = await saveExecutionAsBlueprint(selectedExecutionId, blueprintName.trim());
-      toast.success(`Blueprint "${res.name}" saved successfully!`);
-      setShowSaveBpModal(false);
-      setBlueprintName("");
-      setSelectedExecutionId(null);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      toast.error(`Failed to save blueprint: ${msg}`);
     }
   };
 
@@ -221,13 +200,6 @@ const Reports = () => {
                   {formatTime(report.timestamp)}
                 </span>
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  {(report.status.toLowerCase() === "success" || report.status.toLowerCase() === "partial") && (
-                    <button onClick={(e) => { e.stopPropagation(); setSelectedExecutionId(report.execution_id); setShowSaveBpModal(true); }}
-                      className="p-1.5 rounded-lg border border-glass-border text-muted-foreground hover:text-emerald-400 hover:border-emerald-400/30 transition-colors"
-                      title="Save as Blueprint">
-                      <Save className="w-3.5 h-3.5" />
-                    </button>
-                  )}
                   <button onClick={(e) => { e.stopPropagation(); handleExport(report.execution_id); }}
                     className="p-1.5 rounded-lg border border-glass-border text-muted-foreground hover:text-primary hover:border-primary/30 transition-colors">
                     <Download className="w-3.5 h-3.5" />
@@ -266,54 +238,6 @@ const Reports = () => {
           </div>
         </div>
       )}
-
-      {/* Save as Blueprint Modal */}
-      {showSaveBpModal && createPortal(
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)" }}>
-          <motion.div
-            initial={{ scale: 0.9, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            exit={{ scale: 0.9, opacity: 0 }}
-            className="glass-panel glass-glow-cyan w-full max-w-md p-6 space-y-4"
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="font-mono text-lg font-bold text-foreground">Save as Blueprint</h3>
-              <button onClick={() => setShowSaveBpModal(false)} className="text-muted-foreground hover:text-foreground transition-colors">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div>
-              <label className="font-mono text-xs text-muted-foreground block mb-2">Blueprint Name</label>
-              <input
-                type="text"
-                value={blueprintName}
-                onChange={(e) => setBlueprintName(e.target.value)}
-                placeholder="E.g., Amazon Product Search Flow"
-                className="w-full font-mono text-sm text-foreground bg-muted/10 rounded-lg px-3 py-2 border border-glass-border/60 outline-none focus:ring-1 focus:ring-primary/40"
-                autoFocus
-                onKeyDown={(e) => e.key === "Enter" && handleSaveAsBlueprint()}
-              />
-            </div>
-            <div className="flex items-center gap-2 justify-end">
-              <button
-                onClick={() => setShowSaveBpModal(false)}
-                className="px-4 py-2 rounded-lg font-mono text-xs text-muted-foreground hover:text-foreground border border-glass-border hover:border-primary/30 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSaveAsBlueprint}
-                disabled={!blueprintName.trim()}
-                className="px-4 py-2 rounded-lg font-mono text-xs text-primary border border-primary/30 hover:bg-primary/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <Save className="w-3.5 h-3.5 inline mr-1.5" /> Save Blueprint
-              </button>
-            </div>
-          </motion.div>
-        </div>,
-        document.body
-      )}
-
     </div>
   );
 };
