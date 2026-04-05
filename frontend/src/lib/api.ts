@@ -75,6 +75,9 @@ export const updateBlueprint = (blueprint_id: string, data: any) =>
 export const deleteBlueprint = (blueprint_id: string) =>
   api.delete(`/api/blueprints/${blueprint_id}`).then((r) => r.data);
 
+export const duplicateBlueprint = (blueprint_id: string) =>
+  api.post(`/api/blueprints/${blueprint_id}/duplicate`).then((r) => r.data);
+
 // NEW: Run blueprint
 export const runBlueprint = (blueprint_id: string, variables: any = {}) =>
   api.post(`/api/blueprints/${blueprint_id}/run`, { variables }).then((r) => r.data);
@@ -86,6 +89,55 @@ export const getNetworkLogs = (execution_id: string) =>
 // Schedules
 export const listSchedules = (params?: any) =>
   api.get("/api/schedules", { params }).then((r) => r.data);
+
+// Secrets
+export const listSecrets = (params?: any) =>
+  api.get("/api/secrets", { params }).then((r) => r.data);
+
+export const createSecret = (data: any) =>
+  api.post("/api/secrets", data).then((r) => r.data);
+
+export const deleteSecret = (secret_id: string) =>
+  api.delete(`/api/secrets/${secret_id}`).then((r) => r.data);
+
+// Webhooks  
+export const listWebhooks = (params?: any) =>
+  api.get("/api/webhooks", { params }).then((r) => r.data);
+
+export const createWebhook = (data: any) =>
+  api.post("/api/webhooks", data).then((r) => r.data);
+
+export const deleteWebhook = (webhook_id: string) =>
+  api.delete(`/api/webhooks/${webhook_id}`).then((r) => r.data);
+
+// Workspaces
+export const listWorkspaces = (params?: any) =>
+  api.get("/api/workspaces", { params }).then((r) => r.data);
+
+export const createWorkspace = (data: any) =>
+  api.post("/api/workspaces", data).then((r) => r.data);
+
+// Analytics
+export const getFlakyBlueprints = (params?: any) =>
+  api.get("/api/analytics/flaky", { params }).then((r) => r.data);
+
+export const getRegressions = (params?: any) =>
+  api.get("/api/analytics/regressions", { params }).then((r) => r.data);
+
+export const getPerformanceRegressions = (params?: any) =>
+  api.get("/api/analytics/performance-regressions", { params }).then((r) => r.data);
+
+export const getTimeseries = (period: string = "7d") =>
+  api.get(`/api/analytics/timeseries?period=${period}`).then((r) => r.data);
+
+// Alias for backward compatibility
+export const getTimeSeries = getTimeseries;
+
+export const getTopBlueprints = (params?: any) =>
+  api.get("/api/analytics/top-blueprints", { params }).then((r) => r.data);
+
+export const runBlueprint = (blueprint_id: string, variables?: any) =>
+  api.post(`/api/blueprints/${blueprint_id}/run`, { variables }).then((r) => r.data);
 
 // Types
 export interface Execution {
@@ -134,6 +186,27 @@ export interface ActionResult {
   status: string;
   duration_ms: number;
   error_message?: string;
+}
+
+export interface Secret {
+  secret_id: string;
+  name: string;
+  data: any;
+  created_at: string;
+}
+
+export interface Webhook {
+  webhook_id: string;
+  name: string;
+  url: string;
+  events: string[];
+  enabled: boolean;
+}
+
+export interface Workspace {
+  workspace_id: string;
+  name: string;
+  members?: any[];
 }
 
 // WebSocket URL helper
