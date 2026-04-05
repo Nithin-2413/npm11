@@ -10,6 +10,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from faker import Faker
 from utils.logger import get_logger
+from core.smart_popup import SmartPopupDetector
+from core.smart_checkbox import SmartCheckbox, SmartDropdown
 
 logger = get_logger(__name__)
 fake = Faker()
