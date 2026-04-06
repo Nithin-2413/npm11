@@ -167,7 +167,10 @@ async def get_blueprint_executions(blueprint_id: str, limit: int = Query(20)):
 
 
 @router.post("/executions/{execution_id}/save-as-blueprint", status_code=201)
-async def save_execution_as_blueprint(execution_id: str, blueprint_name: str):
+async def save_execution_as_blueprint(
+    execution_id: str,
+    blueprint_name: str = Query(..., description="Name for the new blueprint")
+):
     """Save a completed execution as a reusable blueprint."""
     db = get_db()
     

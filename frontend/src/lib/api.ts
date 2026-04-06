@@ -78,7 +78,7 @@ export const getBlueprintExecutions = (id: string) =>
 
 export const saveExecutionAsBlueprint = (execution_id: string, blueprint_name: string) =>
   request<{ blueprint_id: string; message: string; name: string }>(
-    `/api/blueprints/executions/${execution_id}/save-as-blueprint?blueprint_name=${encodeURIComponent(blueprint_name)}`,
+    `/api/executions/${execution_id}/save-as-blueprint?blueprint_name=${encodeURIComponent(blueprint_name)}`,
     { method: "POST" }
   );
 
