@@ -179,19 +179,21 @@ async def save_execution_as_blueprint(
     if not exec_doc:
         raise HTTPException(status_code=404, detail="Execution not found")
     
-    # Extract command (original user input)
-    original_command = exec_doc.get("original_command", "")
+    # Extract command (try both 'command' and 'original_command' fields)
+    original_command = exec_doc.get("command") or exec_doc.get("original_command", "")
     if not original_command:
         raise HTTPException(status_code=400, detail="Execution has no command to save")
     
-    # Extract variables from command
-    variables = extract_variables(original_command)
+    # Extract variables from command text (look for {{VAR_NAME}} patterns)
+    import re
+    pattern = re.compile(r'\{\{([A-Z0-9_]+)\}\}')
+    variables = sorted(set(match.group(1) for match in pattern.finditer(original_command)))
     
     # Create blueprint structure
     blueprint_data = {
         "blueprint_id": generate_id("bp"),
         "name": blueprint_name or f"Blueprint from {execution_id[:8]}",
-        "description": f"Auto-saved from execution: {original_command}",
+        "description": f"Auto-saved from execution: {original_command[:100]}{'...' if len(original_command) > 100 else ''}",
         "version": "1.0",
         "created_at": utcnow_str(),
         "updated_at": utcnow_str(),
@@ -203,7 +205,7 @@ async def save_execution_as_blueprint(
             "tags": ["auto-saved"],
             "success_rate": 1.0 if exec_doc.get("status") == "SUCCESS" else 0.0,
             "usage_count": 0,
-            "avg_duration": exec_doc.get("duration", 0.0),
+            "avg_duration": exec_doc.get("duration_seconds", 0.0),
             "source_execution_id": execution_id,
         },
     }
