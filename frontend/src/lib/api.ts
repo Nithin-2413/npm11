@@ -76,6 +76,12 @@ export const injectBlueprint = (id: string, variables: Record<string, string>) =
 export const getBlueprintExecutions = (id: string) =>
   request<{ executions: Execution[]; total: number }>(`/api/blueprints/${id}/executions`);
 
+export const saveExecutionAsBlueprint = (execution_id: string, blueprint_name: string) =>
+  request<{ blueprint_id: string; message: string; name: string }>(
+    `/api/blueprints/executions/${execution_id}/save-as-blueprint?blueprint_name=${encodeURIComponent(blueprint_name)}`,
+    { method: "POST" }
+  );
+
 // ─────────────── Reports ───────────────
 export const listReports = (params?: { status?: string; page?: number; page_size?: number }) => {
   const qs = new URLSearchParams(params as Record<string, string>).toString();

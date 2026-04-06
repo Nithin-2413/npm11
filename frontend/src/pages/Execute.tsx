@@ -9,11 +9,11 @@ import { LiquidProgress } from "@/components/LiquidProgress";
 import { LiveBrowserPreview } from "@/components/LiveBrowserPreview";
 import {
   Play, X, Brain, Wrench, AlertTriangle, Zap, ArrowRight,
-  RefreshCw, BookOpen, CheckCircle, XCircle, AlertCircle
+  RefreshCw, BookOpen, CheckCircle, XCircle, AlertCircle, Save
 } from "lucide-react";
 import {
   executeCommand, executeBlueprint, cancelExecution, createExecutionWS,
-  listBlueprints, Blueprint, ActionResult, NetworkRequest
+  listBlueprints, Blueprint, ActionResult, NetworkRequest, saveExecutionAsBlueprint
 } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -58,6 +58,12 @@ const Execute = () => {
   const [blueprints, setBlueprints] = useState<Blueprint[]>([]);
   const [showBpMenu, setShowBpMenu] = useState(false);
 
+  // Save Flow UI states
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [blueprintName, setBlueprintName] = useState("");
+  const [saveMode, setSaveMode] = useState<"quick" | "edit" | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
   // Real-time state
   const [actions, setActions] = useState<ActionResult[]>([]);
   const [terminalLogs, setTerminalLogs] = useState<TerminalLine[]>([]);
@@ -97,6 +103,20 @@ const Execute = () => {
   useEffect(() => {
     listBlueprints({ page_size: 20 } as never).then(r => setBlueprints(r.blueprints)).catch(() => {});
   }, []);
+
+  // Show save modal after EVERY execution (success, failure, or partial)
+  useEffect(() => {
+    if (!isRunning && executionId && (status === "success" || status === "failure" || status === "partial")) {
+      // Show save modal after 1 second delay
+      const timer = setTimeout(() => {
+        setShowSaveModal(true);
+        // Auto-generate name suggestion
+        const suggestion = command.substring(0, 40).replace(/[^a-zA-Z0-9 ]/g, "").trim() || "My Flow";
+        setBlueprintName(suggestion);
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [isRunning, executionId, status, command]);
 
   // Auto-scroll terminal
   useEffect(() => {
@@ -447,6 +467,61 @@ const Execute = () => {
       setStatus("failure");
       clearAllTimers();
     }
+  };
+
+  // Save Blueprint Handlers
+  const handleQuickSave = async () => {
+    if (!executionId) return;
+    
+    // Auto-generate blueprint name from command
+    const autoName = command.substring(0, 50).replace(/[^a-zA-Z0-9 ]/g, "").trim() || "Saved Flow";
+    const timestamp = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    const finalName = `${autoName} (${timestamp})`;
+    
+    setIsSaving(true);
+    try {
+      const result = await saveExecutionAsBlueprint(executionId, finalName);
+      toast.success(`✓ Saved as "${result.name}"`);
+      setShowSaveModal(false);
+      
+      // Refresh blueprints list
+      listBlueprints({ page_size: 20 } as never).then(r => setBlueprints(r.blueprints)).catch(() => {});
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`Failed to save: ${msg}`);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleSaveAndEdit = async () => {
+    if (!executionId || !blueprintName.trim()) {
+      toast.error("Please enter a blueprint name");
+      return;
+    }
+    
+    setIsSaving(true);
+    try {
+      const result = await saveExecutionAsBlueprint(executionId, blueprintName.trim());
+      toast.success(`✓ Saved as "${result.name}"`);
+      setShowSaveModal(false);
+      
+      // Navigate to blueprint editor
+      setTimeout(() => {
+        navigate(`/blueprints/${result.blueprint_id}`);
+      }, 500);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`Failed to save: ${msg}`);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDontSave = () => {
+    setShowSaveModal(false);
+    setBlueprintName("");
+    setSaveMode(null);
   };
 
   const filteredLogs = consoleFilter === "all" ? terminalLogs : terminalLogs.filter(l => l.type === consoleFilter);
@@ -806,6 +881,128 @@ const Execute = () => {
                   >
                     Use Suggested Command
                   </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>,
+        document.body
+      )}
+
+      {/* Save Blueprint Modal - Shows after EVERY execution */}
+      {createPortal(
+        <AnimatePresence>
+          {showSaveModal && executionId && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={handleDontSave}
+              className="fixed inset-0 z-[100] bg-background/60 backdrop-blur-sm flex items-center justify-center"
+            >
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                onClick={(e) => e.stopPropagation()}
+                className="w-[90vw] max-w-md"
+              >
+                <div
+                  className="glass-panel p-6 space-y-5 border border-primary/20 rounded-2xl shadow-2xl"
+                  style={{ background: "hsl(var(--glass-bg) / 0.90)", backdropFilter: "blur(40px) saturate(1.8)" }}
+                >
+                  {/* Header */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Save className="w-5 h-5 text-primary" />
+                      <span className="font-mono text-base font-bold text-foreground">
+                        {status === "success" ? "✓ Execution Complete!" : status === "partial" ? "⚡ Partial Success" : "⚠ Execution Failed"}
+                      </span>
+                    </div>
+                    <button onClick={handleDontSave} className="text-muted-foreground hover:text-foreground">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Status Summary */}
+                  <div className="p-3 rounded-lg bg-muted/20 border border-glass-border/40 font-mono text-xs space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Actions:</span>
+                      <span className="text-foreground font-semibold">{successCount}/{totalActions} successful</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Duration:</span>
+                      <span className="text-foreground font-semibold">{elapsed.toFixed(1)}s</span>
+                    </div>
+                    {status === "failure" && (
+                      <div className="text-destructive text-[10px] mt-2">
+                        💡 Save as draft to debug and fix later
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Save Prompt */}
+                  <div className="space-y-3">
+                    <p className="font-mono text-sm text-foreground/80">
+                      💾 <span className="font-semibold">Save this flow as a blueprint?</span>
+                    </p>
+                    
+                    {/* Blueprint Name Input */}
+                    <div>
+                      <label className="font-mono text-xs text-muted-foreground mb-1 block">Blueprint Name:</label>
+                      <input
+                        type="text"
+                        value={blueprintName}
+                        onChange={(e) => setBlueprintName(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && handleSaveAndEdit()}
+                        placeholder="e.g., Amazon Product Search"
+                        className="w-full font-mono text-sm px-3 py-2 rounded-lg bg-muted/10 border border-glass-border/60 text-foreground outline-none focus:ring-1 focus:ring-primary/40 placeholder:text-muted-foreground/40"
+                        autoFocus
+                      />
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        onClick={handleQuickSave}
+                        disabled={isSaving}
+                        className="flex flex-col items-center gap-1 px-3 py-3 rounded-lg border border-primary/30 bg-primary/5 hover:bg-primary/10 text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <Save className="w-4 h-4" />
+                        <span className="font-mono text-[10px] font-semibold">Quick Save</span>
+                      </button>
+                      
+                      <button
+                        onClick={handleSaveAndEdit}
+                        disabled={isSaving || !blueprintName.trim()}
+                        className="flex flex-col items-center gap-1 px-3 py-3 rounded-lg border border-emerald-400/30 bg-emerald-400/5 hover:bg-emerald-400/10 text-emerald-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <BookOpen className="w-4 h-4" />
+                        <span className="font-mono text-[10px] font-semibold">Save & Edit</span>
+                      </button>
+                      
+                      <button
+                        onClick={handleDontSave}
+                        disabled={isSaving}
+                        className="flex flex-col items-center gap-1 px-3 py-3 rounded-lg border border-glass-border bg-muted/5 hover:bg-muted/10 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                      >
+                        <X className="w-4 h-4" />
+                        <span className="font-mono text-[10px]">Don't Save</span>
+                      </button>
+                    </div>
+
+                    {/* Helper Text */}
+                    {status === "success" && (
+                      <p className="font-mono text-[10px] text-muted-foreground/70 text-center">
+                        Variables like emails and names will be auto-detected
+                      </p>
+                    )}
+                    {status === "failure" && (
+                      <p className="font-mono text-[10px] text-amber-400/70 text-center">
+                        Saved flows can be edited and debugged later
+                      </p>
+                    )}
+                  </div>
                 </div>
               </motion.div>
             </motion.div>

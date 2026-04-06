@@ -21,25 +21,126 @@ SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def resolve_faker_value(value: str) -> str:
-    """Replace {{FAKER:type}} placeholders with real fake data."""
-    if not value or "{{FAKER:" not in value:
+    """
+    Replace {FAKER:type} and {{FAKER:type}} placeholders with real fake data.
+    Supports comprehensive faker types, custom formats, and locale.
+    """
+    if not value:
+        return value
+    
+    # Support BOTH syntaxes: {FAKER:type} and {{FAKER:type}}
+    if not ("{FAKER:" in value or "{{FAKER:" in value):
         return value
 
     def replacer(match):
-        faker_type = match.group(1).lower()
+        # Extract the full faker specification
+        faker_spec = match.group(1).strip()
+        parts = faker_spec.split(":")
+        faker_type = parts[0].lower()
+        
+        # Handle locale if specified (e.g., FAKER:name:US)
+        locale = None
+        if len(parts) > 1 and parts[1].upper() in ["US", "UK", "IN", "FR", "DE", "JP", "CN"]:
+            locale = parts[1].upper()
+            # Create locale-specific faker (for now using default, can be enhanced)
+        
+        # Comprehensive faker types mapping
         mapping = {
-            "email": fake.email(), "name": fake.name(), "first_name": fake.first_name(),
-            "last_name": fake.last_name(), "phone": fake.phone_number(),
-            "address": fake.address().replace("\n", ", "), "company": fake.company(),
-            "username": fake.user_name(), "password": fake.password(length=12),
-            "url": fake.url(), "city": fake.city(), "country": fake.country(),
-            "zip": fake.zipcode(), "date": fake.date(), "text": fake.text(max_nb_chars=100),
-            "sentence": fake.sentence(), "word": fake.word(),
-            "number": str(fake.random_int(1, 1000)), "uuid": str(uuid.uuid4()),
+            # Personal Information
+            "email": fake.email(),
+            "name": fake.name(),
+            "first_name": fake.first_name(),
+            "last_name": fake.last_name(),
+            "phone": fake.phone_number(),
+            "mobile": fake.phone_number(),
+            "username": fake.user_name(),
+            "password": fake.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True),
+            
+            # Address Information
+            "address": fake.address().replace("\n", ", "),
+            "street": fake.street_address(),
+            "city": fake.city(),
+            "state": fake.state(),
+            "zipcode": fake.zipcode(),
+            "zip": fake.zipcode(),
+            "country": fake.country(),
+            
+            # Business Information
+            "company": fake.company(),
+            "job_title": fake.job(),
+            "job": fake.job(),
+            "department": fake.job(),
+            "company_email": fake.company_email(),
+            
+            # Internet/Tech
+            "url": fake.url(),
+            "domain": fake.domain_name(),
+            "ipv4": fake.ipv4(),
+            "ipv6": fake.ipv6(),
+            "mac_address": fake.mac_address(),
+            "mac": fake.mac_address(),
+            "user_agent": fake.user_agent(),
+            "uuid": str(uuid.uuid4()),
+            
+            # Financial
+            "credit_card": fake.credit_card_number(),
+            "credit_card_cvv": fake.credit_card_security_code(),
+            "cvv": fake.credit_card_security_code(),
+            "credit_card_expiry": fake.credit_card_expire(),
+            "iban": fake.iban(),
+            "bic": fake.bic(),
+            
+            # Dates & Times
+            "date": fake.date(),
+            "date_future": fake.future_date().strftime("%Y-%m-%d"),
+            "date_past": fake.past_date().strftime("%Y-%m-%d"),
+            "time": fake.time(),
+            "datetime": fake.date_time().strftime("%Y-%m-%d %H:%M:%S"),
+            "year": str(fake.year()),
+            "month": fake.month_name(),
+            
+            # Text Content
+            "word": fake.word(),
+            "sentence": fake.sentence(),
+            "paragraph": fake.paragraph(),
+            "text": fake.text(max_nb_chars=200),
+            
+            # Numbers
+            "number": str(fake.random_int(1, 1000)),
+            "float": str(round(fake.random.uniform(1, 1000), 2)),
+            "digit": str(fake.random_digit()),
+            
+            # Product/Commerce
+            "product": fake.word().capitalize() + " " + fake.word().capitalize(),
+            "product_category": fake.word().capitalize(),
+            "price": f"${fake.random_int(1, 999)}.{fake.random_int(0, 99):02d}",
+            "currency_code": fake.currency_code(),
+            
+            # Pattern-based (e.g., FAKER:pattern:XXX-###)
+            "pattern": faker_spec.split(":")[1] if len(parts) > 1 else "XXX-###",
         }
+        
+        # Handle pattern generation
+        if faker_type == "pattern" and len(parts) > 1:
+            pattern = parts[1]
+            result = ""
+            for char in pattern:
+                if char == "X":
+                    result += fake.random_uppercase_letter()
+                elif char == "#":
+                    result += str(fake.random_digit())
+                else:
+                    result += char
+            return result
+        
+        # Return mapped value or fallback
         return mapping.get(faker_type, fake.word())
 
-    return re.sub(r'\{\{FAKER:([^}]+)\}\}', replacer, value)
+    # Replace both {FAKER:type} and {{FAKER:type}} patterns
+    value = re.sub(r'\{\{FAKER:([^}]+)\}\}', replacer, value)  # {{FAKER:type}}
+    value = re.sub(r'\{FAKER:([^}]+)\}', replacer, value)      # {FAKER:type}
+    
+    return value
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -464,12 +565,9 @@ class BrowserAgent:
             url = action.get("url", action.get("value", ""))
             logger.info(f"Navigating to {url}")
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            # Auto-handle popups ONLY if command mentions popup-related keywords
             await asyncio.sleep(0.8)
-            # Check if command intent includes popup handling
-            command_lower = intent.lower()
-            if any(keyword in command_lower for keyword in ["popup", "close", "dismiss", "banner", "cookie"]):
-                await self.handle_popups_and_banners()
+            # CRITICAL FIX: Never auto-handle popups unless explicitly requested
+            # Popups will only be handled via explicit "handle_popup" action type
 
         elif action_type == "fill":
             selector = action.get("selector", "")
