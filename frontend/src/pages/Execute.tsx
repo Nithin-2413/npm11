@@ -63,6 +63,7 @@ const Execute = () => {
   const [blueprintName, setBlueprintName] = useState("");
   const [saveMode, setSaveMode] = useState<"quick" | "edit" | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveModalShownForExecution, setSaveModalShownForExecution] = useState<string | null>(null);
 
   // Real-time state
   const [actions, setActions] = useState<ActionResult[]>([]);
@@ -104,19 +105,25 @@ const Execute = () => {
     listBlueprints({ page_size: 20 } as never).then(r => setBlueprints(r.blueprints)).catch(() => {});
   }, []);
 
-  // Show save modal after EVERY execution (success, failure, or partial)
+  // Show save modal after EVERY execution (success, failure, or partial) - BUT ONLY ONCE
   useEffect(() => {
     if (!isRunning && executionId && (status === "success" || status === "failure" || status === "partial")) {
+      // Check if modal already shown for this execution
+      if (saveModalShownForExecution === executionId) {
+        return; // Already shown, don't show again
+      }
+      
       // Show save modal after 1 second delay
       const timer = setTimeout(() => {
         setShowSaveModal(true);
+        setSaveModalShownForExecution(executionId); // Mark as shown
         // Auto-generate name suggestion
         const suggestion = command.substring(0, 40).replace(/[^a-zA-Z0-9 ]/g, "").trim() || "My Flow";
         setBlueprintName(suggestion);
       }, 1000);
       return () => clearTimeout(timer);
     }
-  }, [isRunning, executionId, status, command]);
+  }, [isRunning, executionId, status, command, saveModalShownForExecution]);
 
   // Auto-scroll terminal
   useEffect(() => {
@@ -387,6 +394,10 @@ const Execute = () => {
     setIsRunning(true);
     isExecutingRef.current = true; // FIX 1: Mark as executing
     startTime.current = Date.now();
+    
+    // Reset save modal tracking for new execution
+    setSaveModalShownForExecution(null);
+    setShowSaveModal(false);
 
     elapsedRef.current = setInterval(() => {
       setElapsed(Math.round((Date.now() - startTime.current) / 100) / 10);
@@ -446,6 +457,10 @@ const Execute = () => {
     setIsRunning(true);
     isExecutingRef.current = true;
     startTime.current = Date.now();
+    
+    // Reset save modal tracking for new execution
+    setSaveModalShownForExecution(null);
+    setShowSaveModal(false);
 
     elapsedRef.current = setInterval(() => {
       setElapsed(Math.round((Date.now() - startTime.current) / 100) / 10);
@@ -630,6 +645,23 @@ const Execute = () => {
               </svg>
               Stealth {stealthMode ? "ON" : "OFF"}
             </button>
+            
+            {/* Save Flow Button - Only show when execution is complete */}
+            {!isRunning && executionId && (status === "success" || status === "failure" || status === "partial") && (
+              <button
+                onClick={() => {
+                  setShowSaveModal(true);
+                  // Auto-generate name suggestion
+                  const suggestion = command.substring(0, 40).replace(/[^a-zA-Z0-9 ]/g, "").trim() || "My Flow";
+                  setBlueprintName(suggestion);
+                }}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-mono text-xs border border-primary/30 text-primary hover:bg-primary/10 hover:border-primary/50 transition-colors"
+                title="Save this flow as a blueprint"
+              >
+                <Save className="w-3.5 h-3.5" />
+                Save Flow
+              </button>
+            )}
           </div>
           {aiSummary && !isRunning && (
             <div className="p-3 rounded-lg bg-primary/5 border border-primary/20 font-mono text-[11px] text-muted-foreground">
