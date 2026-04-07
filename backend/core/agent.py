@@ -44,97 +44,138 @@ def resolve_faker_value(value: str) -> str:
             locale = parts[1].upper()
             # Create locale-specific faker (for now using default, can be enhanced)
         
-        # Comprehensive faker types mapping
-        mapping = {
+        # LAZY EVALUATION: Call Faker methods only when needed
+        try:
             # Personal Information
-            "email": fake.email(),
-            "name": fake.name(),
-            "first_name": fake.first_name(),
-            "last_name": fake.last_name(),
-            "phone": fake.phone_number(),
-            "mobile": fake.phone_number(),
-            "username": fake.user_name(),
-            "password": fake.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True),
+            if faker_type == "email":
+                return fake.email()
+            elif faker_type == "name":
+                return fake.name()
+            elif faker_type == "first_name":
+                return fake.first_name()
+            elif faker_type == "last_name":
+                return fake.last_name()
+            elif faker_type == "phone" or faker_type == "mobile":
+                return fake.phone_number()
+            elif faker_type == "username":
+                return fake.user_name()
+            elif faker_type == "password":
+                return fake.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True)
             
             # Address Information
-            "address": fake.address().replace("\n", ", "),
-            "street": fake.street_address(),
-            "city": fake.city(),
-            "state": fake.state(),
-            "zipcode": fake.zipcode(),
-            "zip": fake.zipcode(),
-            "country": fake.country(),
+            elif faker_type == "address":
+                return fake.address().replace("\n", ", ")
+            elif faker_type == "street":
+                return fake.street_address()
+            elif faker_type == "city":
+                return fake.city()
+            elif faker_type == "state":
+                return fake.state()
+            elif faker_type == "zipcode" or faker_type == "zip":
+                return fake.zipcode()
+            elif faker_type == "country":
+                return fake.country()
             
             # Business Information
-            "company": fake.company(),
-            "job_title": fake.job(),
-            "job": fake.job(),
-            "department": fake.job(),
-            "company_email": fake.company_email(),
+            elif faker_type == "company":
+                return fake.company()
+            elif faker_type == "job_title" or faker_type == "job" or faker_type == "department":
+                return fake.job()
+            elif faker_type == "company_email":
+                return fake.company_email()
             
             # Internet/Tech
-            "url": fake.url(),
-            "domain": fake.domain_name(),
-            "ipv4": fake.ipv4(),
-            "ipv6": fake.ipv6(),
-            "mac_address": fake.mac_address(),
-            "mac": fake.mac_address(),
-            "user_agent": fake.user_agent(),
-            "uuid": str(uuid.uuid4()),
+            elif faker_type == "url":
+                return fake.url()
+            elif faker_type == "domain":
+                return fake.domain_name()
+            elif faker_type == "ipv4":
+                return fake.ipv4()
+            elif faker_type == "ipv6":
+                return fake.ipv6()
+            elif faker_type == "mac_address" or faker_type == "mac":
+                return fake.mac_address()
+            elif faker_type == "user_agent":
+                return fake.user_agent()
+            elif faker_type == "uuid":
+                return str(uuid.uuid4())
             
             # Financial
-            "credit_card": fake.credit_card_number(),
-            "credit_card_cvv": fake.credit_card_security_code(),
-            "cvv": fake.credit_card_security_code(),
-            "credit_card_expiry": fake.credit_card_expire(),
-            "iban": fake.iban(),
-            "bic": fake.bic(),
+            elif faker_type == "credit_card":
+                return fake.credit_card_number()
+            elif faker_type == "credit_card_cvv" or faker_type == "cvv":
+                return fake.credit_card_security_code()
+            elif faker_type == "credit_card_expiry":
+                return fake.credit_card_expire()
+            elif faker_type == "iban":
+                return fake.iban()
+            elif faker_type == "bic" or faker_type == "swift":
+                return fake.swift()
             
             # Dates & Times
-            "date": fake.date(),
-            "date_future": fake.future_date().strftime("%Y-%m-%d"),
-            "date_past": fake.past_date().strftime("%Y-%m-%d"),
-            "time": fake.time(),
-            "datetime": fake.date_time().strftime("%Y-%m-%d %H:%M:%S"),
-            "year": str(fake.year()),
-            "month": fake.month_name(),
+            elif faker_type == "date":
+                return fake.date()
+            elif faker_type == "date_future":
+                return fake.future_date().strftime("%Y-%m-%d")
+            elif faker_type == "date_past":
+                return fake.past_date().strftime("%Y-%m-%d")
+            elif faker_type == "time":
+                return fake.time()
+            elif faker_type == "datetime":
+                return fake.date_time().strftime("%Y-%m-%d %H:%M:%S")
+            elif faker_type == "year":
+                return str(fake.year())
+            elif faker_type == "month":
+                return fake.month_name()
             
             # Text Content
-            "word": fake.word(),
-            "sentence": fake.sentence(),
-            "paragraph": fake.paragraph(),
-            "text": fake.text(max_nb_chars=200),
+            elif faker_type == "word":
+                return fake.word()
+            elif faker_type == "sentence":
+                return fake.sentence()
+            elif faker_type == "paragraph":
+                return fake.paragraph()
+            elif faker_type == "text":
+                return fake.text(max_nb_chars=200)
             
             # Numbers
-            "number": str(fake.random_int(1, 1000)),
-            "float": str(round(fake.random.uniform(1, 1000), 2)),
-            "digit": str(fake.random_digit()),
+            elif faker_type == "number":
+                return str(fake.random_int(1, 1000))
+            elif faker_type == "float":
+                return str(round(fake.random.uniform(1, 1000), 2))
+            elif faker_type == "digit":
+                return str(fake.random_digit())
             
             # Product/Commerce
-            "product": fake.word().capitalize() + " " + fake.word().capitalize(),
-            "product_category": fake.word().capitalize(),
-            "price": f"${fake.random_int(1, 999)}.{fake.random_int(0, 99):02d}",
-            "currency_code": fake.currency_code(),
+            elif faker_type == "product":
+                return fake.word().capitalize() + " " + fake.word().capitalize()
+            elif faker_type == "product_category":
+                return fake.word().capitalize()
+            elif faker_type == "price":
+                return f"${fake.random_int(1, 999)}.{fake.random_int(0, 99):02d}"
+            elif faker_type == "currency_code":
+                return fake.currency_code()
             
             # Pattern-based (e.g., FAKER:pattern:XXX-###)
-            "pattern": faker_spec.split(":")[1] if len(parts) > 1 else "XXX-###",
-        }
-        
-        # Handle pattern generation
-        if faker_type == "pattern" and len(parts) > 1:
-            pattern = parts[1]
-            result = ""
-            for char in pattern:
-                if char == "X":
-                    result += fake.random_uppercase_letter()
-                elif char == "#":
-                    result += str(fake.random_digit())
-                else:
-                    result += char
-            return result
-        
-        # Return mapped value or fallback
-        return mapping.get(faker_type, fake.word())
+            elif faker_type == "pattern" and len(parts) > 1:
+                pattern = parts[1]
+                result = ""
+                for char in pattern:
+                    if char == "X":
+                        result += fake.random_uppercase_letter()
+                    elif char == "#":
+                        result += str(fake.random_digit())
+                    else:
+                        result += char
+                return result
+            
+            # Default fallback
+            else:
+                return fake.word()
+                
+        except Exception as e:
+            logger.error(f"Error generating Faker data for type '{faker_type}': {e}")
+            return fake.word()  # Fallback to simple word
 
     # Replace both {FAKER:type} and {{FAKER:type}} patterns
     value = re.sub(r'\{\{FAKER:([^}]+)\}\}', replacer, value)  # {{FAKER:type}}
