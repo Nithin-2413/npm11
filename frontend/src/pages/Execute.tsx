@@ -794,7 +794,11 @@ const Execute = () => {
       {!isRunning && totalActions === 0 && terminalLogs.length === 0 && (
         <GlassPanel glow="cyan" delay={0.2}>
           <div className="text-center py-12 space-y-4">
-            <div className="text-5xl">🤖</div>
+            <div className="flex justify-center">
+              <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center">
+                <Zap className="w-8 h-8 text-primary" />
+              </div>
+            </div>
             <h2 className="font-mono text-xl font-bold text-foreground">Ready to Execute</h2>
             <p className="font-mono text-sm text-muted-foreground max-w-md mx-auto">
               Enter a natural language command above to start AI-powered browser automation.
