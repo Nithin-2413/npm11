@@ -273,17 +273,21 @@ class SmartInteractionEngine:
     
     async def _select_custom_dropdown(self, dropdown, option_text: str, selector: str) -> Tuple[bool, str]:
         """
-        Handle custom dropdowns with STRICT verification.
-        CRITICAL: Click to open, verify options appeared, select, verify selection.
+        Handle custom dropdowns with STRICT verification for sorting/filtering.
+        CRITICAL: Click to open, WAIT for options, select, WAIT for re-render, VERIFY page state changed.
         """
         try:
             logger.info(f"Handling custom dropdown for option: '{option_text}'")
             
+            # Capture initial page state for sort/filter verification
+            initial_html = await self.page.content()
+            initial_url = self.page.url
+            
             # STEP 1: Click to open dropdown
             await dropdown.click(timeout=3000)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.5)  # CRITICAL: Wait 500ms for options to fully render
             
-            # STEP 2: VERIFY options menu appeared
+            # STEP 2: VERIFY options menu appeared with LONGER wait
             option_selectors = [
                 "[role='option']",
                 "[role='listbox'] li",
@@ -293,82 +297,165 @@ class SmartInteractionEngine:
                 "ul li",
                 "[class*='option']",
                 "[class*='item']",
+                "[class*='dropdown']",
             ]
             
             options_appeared = False
+            selected_option_selector = None
+            
             for opt_sel in option_selectors:
                 try:
+                    # Wait for options to appear
+                    await asyncio.sleep(0.2)
                     opt_count = await self.page.locator(opt_sel).count()
                     if opt_count > 0:
-                        # Check if any are visible
                         first_opt = self.page.locator(opt_sel).first
                         if await first_opt.is_visible():
                             logger.info(f"✓ Dropdown options appeared: {opt_count} options via {opt_sel}")
                             options_appeared = True
+                            selected_option_selector = opt_sel
                             break
                 except:
                     continue
             
             if not options_appeared:
-                logger.warning("⚠ Could not verify dropdown options appeared")
+                logger.warning("⚠ Could not verify dropdown options appeared - retrying with longer wait")
+                await asyncio.sleep(0.5)  # Extra wait for slow dropdowns
             
-            # STEP 3: Find and click the desired option
+            # STEP 3: Find and click the desired option with CASE-INSENSITIVE matching
             option_clicked = False
             clicked_selector = None
             
-            # Try different option selectors with text match
-            option_match_selectors = [
-                f"[role='option']:has-text('{option_text}')",
-                f"li:has-text('{option_text}')",
-                f"div:has-text('{option_text}')",
-                f"button:has-text('{option_text}')",
-                f"a:has-text('{option_text}')",
-                f"[data-value='{option_text}']",
-                f"[value='{option_text}']",
+            # Build comprehensive selectors with case-insensitive text matching
+            option_text_lower = option_text.lower()
+            option_text_variations = [
+                option_text,
+                option_text.lower(),
+                option_text.upper(),
+                option_text.title(),
             ]
             
-            for sel in option_match_selectors:
+            # Try to find option by examining all visible options
+            if selected_option_selector:
                 try:
-                    option = self.page.locator(sel).first
-                    if await option.count() > 0 and await option.is_visible():
-                        await option.click(timeout=2000)
-                        await asyncio.sleep(0.4)
-                        option_clicked = True
-                        clicked_selector = sel
-                        logger.info(f"✓ Clicked option '{option_text}' via {sel}")
-                        break
+                    all_options = self.page.locator(selected_option_selector)
+                    count = await all_options.count()
+                    logger.info(f"Examining {count} options for case-insensitive match...")
+                    
+                    for i in range(count):
+                        opt = all_options.nth(i)
+                        if await opt.is_visible():
+                            opt_text = await opt.text_content()
+                            if opt_text and option_text_lower in opt_text.lower():
+                                logger.info(f"✓ Found matching option: '{opt_text}' (matches '{option_text}')")
+                                await opt.click(timeout=2000)
+                                await asyncio.sleep(0.4)
+                                option_clicked = True
+                                clicked_selector = f"{selected_option_selector}[{i}]"
+                                break
                 except Exception as e:
-                    logger.debug(f"Option selector {sel} failed: {e}")
-                    continue
+                    logger.debug(f"Option enumeration failed: {e}")
+            
+            # Fallback: Try text-based selectors
+            if not option_clicked:
+                for text_var in option_text_variations:
+                    selectors_to_try = [
+                        f"[role='option']:has-text('{text_var}')",
+                        f"li:has-text('{text_var}')",
+                        f"div:has-text('{text_var}')",
+                        f"button:has-text('{text_var}')",
+                        f"a:has-text('{text_var}')",
+                        f"span:has-text('{text_var}')",
+                    ]
+                    
+                    for sel in selectors_to_try:
+                        try:
+                            option = self.page.locator(sel).first
+                            if await option.count() > 0 and await option.is_visible():
+                                await option.click(timeout=2000)
+                                await asyncio.sleep(0.4)
+                                option_clicked = True
+                                clicked_selector = sel
+                                logger.info(f"✓ Clicked option via text selector: {sel}")
+                                break
+                        except:
+                            continue
+                    if option_clicked:
+                        break
             
             if not option_clicked:
                 logger.error(f"✗ Could not find/click option: '{option_text}'")
                 return (False, f"Could not find option: '{option_text}'")
             
-            # STEP 4: VERIFY selection (wait for dropdown to close and check selected value)
-            await asyncio.sleep(0.3)
+            # STEP 4: CRITICAL - Wait for page to re-render after selection
+            logger.info("⏳ Waiting for page re-render after selection...")
             
-            # Try to verify selected value in dropdown trigger
-            try:
-                dropdown_text = await dropdown.text_content()
-                if option_text.lower() in dropdown_text.lower():
-                    logger.info(f"✓ Custom dropdown VERIFIED: '{option_text}' appears selected")
-                    return (True, f"Selected '{option_text}' (verified in dropdown text)")
-                else:
-                    # Check data attributes
-                    data_value = await dropdown.get_attribute("data-value")
-                    aria_label = await dropdown.get_attribute("aria-label")
-                    
-                    if (data_value and option_text.lower() in data_value.lower()) or \
-                       (aria_label and option_text.lower() in aria_label.lower()):
-                        logger.info(f"✓ Custom dropdown VERIFIED: '{option_text}' in attributes")
-                        return (True, f"Selected '{option_text}' (verified in attributes)")
-                    else:
-                        logger.warning(f"⚠ Custom dropdown verification uncertain - option clicked but not confirmed in dropdown text")
-                        return (True, f"Selected '{option_text}' (option clicked, but verification uncertain)")
-            except:
-                logger.info(f"✓ Custom dropdown: option '{option_text}' clicked successfully")
-                return (True, f"Selected '{option_text}' (verified by successful click)")
+            # Watch for loading indicators
+            loading_selectors = [
+                "[class*='loading']",
+                "[class*='spinner']",
+                "[class*='loader']",
+                "[aria-busy='true']",
+                ".loading",
+                "#loading",
+            ]
+            
+            for load_sel in loading_selectors:
+                try:
+                    loader = self.page.locator(load_sel).first
+                    if await loader.is_visible(timeout=500):
+                        logger.info(f"⏳ Loading indicator detected: {load_sel}")
+                        # Wait for it to disappear
+                        await loader.wait_for(state="hidden", timeout=5000)
+                        logger.info(f"✓ Loading completed")
+                        break
+                except:
+                    pass
+            
+            # Additional wait for DOM changes
+            await asyncio.sleep(1.0)  # CRITICAL: Wait for sort/filter to apply
+            
+            # STEP 5: VERIFY sort/filter was actually applied
+            logger.info("🔍 Verifying sort/filter was applied...")
+            
+            new_html = await self.page.content()
+            new_url = self.page.url
+            
+            # Check 1: URL changed (some sites use URL params for filters)
+            if new_url != initial_url:
+                logger.info(f"✓ Sort/Filter VERIFIED: URL changed to {new_url}")
+                return (True, f"Sort/Filter applied (verified: URL changed)")
+            
+            # Check 2: HTML content changed significantly
+            html_diff_ratio = len(set(new_html) - set(initial_html)) / len(initial_html) if initial_html else 0
+            if html_diff_ratio > 0.05:  # More than 5% change
+                logger.info(f"✓ Sort/Filter VERIFIED: HTML changed ({html_diff_ratio:.1%})")
+                return (True, f"Sort/Filter applied (verified: content changed)")
+            
+            # Check 3: Verify dropdown trigger shows selected value
+            dropdown_text = await dropdown.text_content()
+            if option_text_lower in dropdown_text.lower():
+                logger.info(f"✓ Sort/Filter VERIFIED: '{option_text}' appears in dropdown")
+                return (True, f"Selected '{option_text}' (verified in dropdown)")
+            
+            # Check 4: Look for sort/filter indicators on page
+            indicator_selectors = [
+                f"[class*='active']:has-text('{option_text}')",
+                f"[class*='selected']:has-text('{option_text}')",
+                f"[aria-selected='true']:has-text('{option_text}')",
+            ]
+            
+            for ind_sel in indicator_selectors:
+                try:
+                    if await self.page.locator(ind_sel).first.is_visible(timeout=1000):
+                        logger.info(f"✓ Sort/Filter VERIFIED: Found active indicator")
+                        return (True, f"Selected '{option_text}' (verified: indicator found)")
+                except:
+                    pass
+            
+            # If we got here, selection happened but verification is uncertain
+            logger.warning(f"⚠ Sort/Filter verification uncertain for '{option_text}'")
+            return (True, f"Selected '{option_text}' (clicked but verification uncertain - check manually)")
         
         except Exception as e:
             return (False, f"Custom dropdown error: {str(e)}")

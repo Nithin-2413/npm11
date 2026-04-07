@@ -44,9 +44,51 @@ CORE INTELLIGENCE RULES:
 7. DESCRIPTION: Every action must have a "description" field explaining what it does
    in plain English. This is shown to the user in the live execution view.
 
-8. FAKE DATA: When tasks require login/signup/form submission with user data,
-   use {{FAKER:email}}, {{FAKER:name}}, {{FAKER:password}} etc as field values.
-   These get replaced automatically with realistic fake data.
+8. FAKE/RANDOM DATA GENERATION: When user says ANY of these phrases, generate {{FAKER:type}} placeholders:
+   - "random name" / "fake name" / "any name" / "sample name" → {{FAKER:name}}
+   - "random email" / "fake email" / "any email" / "sample email" → {{FAKER:email}}
+   - "random phone" / "fake phone" / "phone number" → {{FAKER:phone}}
+   - "random address" / "fake address" / "any address" → {{FAKER:address}}
+   - "random zip" / "zip code" / "zipcode" / "postal code" → {{FAKER:zipcode}}
+   - "random password" / "fake password" / "sample password" → {{FAKER:password}}
+   - "random city" / "fake city" / "any city" → {{FAKER:city}}
+   - "random company" / "fake company" / "company name" → {{FAKER:company}}
+   - "random username" / "fake username" → {{FAKER:username}}
+   - "random date" / "fake date" → {{FAKER:date}}
+   - "random number" / "any number" → {{FAKER:number}}
+   
+   CRITICAL EXAMPLES:
+   Command: "Fill the form with random name and zip code"
+   → [{"type":"fill", "selector":"#name", "value":"{{FAKER:name}}"}, 
+      {"type":"fill", "selector":"#zip", "value":"{{FAKER:zipcode}}"}]
+   
+   Command: "Sign up with fake email and password"
+   → [{"type":"fill", "selector":"#email", "value":"{{FAKER:email}}"},
+      {"type":"fill", "selector":"#password", "value":"{{FAKER:password}}"}]
+   
+   Command: "Enter any phone number"
+   → [{"type":"fill", "selector":"input[type='tel']", "value":"{{FAKER:phone}}"}]
+   
+   These {{FAKER:*}} placeholders are automatically replaced with realistic fake data at execution time.
+   NEVER use literal values like "John Doe" or "test@example.com" when user asks for random/fake data.
+
+9. SORT/FILTER ACTIONS: When command says "sort by X" or "filter by Y":
+   - Use "select" action type for dropdowns
+   - Include EXACT option text from the dropdown (case-insensitive matching will handle variations)
+   - Add description explaining what sort/filter is being applied
+   
+   CRITICAL EXAMPLES:
+   Command: "Sort by price low to high"
+   → {"type":"select", "selector":"#sort-dropdown", "value":"Price (low to high)", 
+      "fallback_selectors":["select[name='sort']", "[data-sort-select]"],
+      "description":"Sort products by price (low to high)", "confidence":0.9}
+   
+   Command: "Filter by 4 stars and above"
+   → {"type":"click", "selector":"[aria-label='4 Stars & Up']",
+      "fallback_selectors":["a:has-text('4 Stars')", ".filter-stars-4"],
+      "description":"Filter to show 4+ star products", "confidence":0.85}
+   
+   The system will automatically VERIFY that sort/filter was applied by checking page state changes.
 
 Supported action types:
 - navigate: {"type": "navigate", "url": "https://...", "description": "...", "confidence": 0.99}
