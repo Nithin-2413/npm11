@@ -291,6 +291,18 @@ const Execute = () => {
   // WebSocket message handler (extracted to avoid closure issues)
   // ──────────────────────────────────────────────────────────────────────────
   const handleWsMessage = useCallback((msg: Record<string, unknown>) => {
+    // Handle ping/pong to keep connection alive
+    if (msg.type === "ping") {
+      // Respond to server ping with pong
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: "pong" }));
+      }
+      return;
+    } else if (msg.type === "pong") {
+      // Server acknowledged our ping
+      return;
+    }
+    
     if (msg.type === "connected") {
       addLog("system", `Execution ${msg.execution_id || currentExecutionIdRef.current} connected`);
     } else if (msg.type === "status") {
