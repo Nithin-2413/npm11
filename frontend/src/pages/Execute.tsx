@@ -807,8 +807,8 @@ const Execute = () => {
         <GlassPanel glow="cyan" delay={0.2}>
           <div className="text-center py-12 space-y-4">
             <div className="flex justify-center">
-              <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center">
-                <Zap className="w-8 h-8 text-primary" />
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/20 to-pink-500/20 border border-primary/30 flex items-center justify-center shadow-lg shadow-primary/10">
+                <Brain className="w-8 h-8 text-primary" />
               </div>
             </div>
             <h2 className="font-mono text-xl font-bold text-foreground">Ready to Execute</h2>
